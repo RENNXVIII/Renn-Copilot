@@ -1,0 +1,65 @@
+{
+  "name": "renn-copilot",
+  "displayName": "Renn Copilot Bridge",
+  "description": "Thin bridge that syncs models from the renn-copilot dashboard into VS Code's BYOK \"Custom Endpoint\" provider (User/chatLanguageModels.json).",
+  "version": "0.3.0",
+  "publisher": "renn",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "rennCopilot.syncModels",
+        "title": "Renn Copilot: Sync Models from Dashboard"
+      },
+      {
+        "command": "rennCopilot.openDashboard",
+        "title": "Renn Copilot: Open Dashboard"
+      },
+      {
+        "command": "rennCopilot.copyApiKey",
+        "title": "Renn Copilot: Copy API Key to Clipboard"
+      },
+      {
+        "command": "rennCopilot.showHealthDetails",
+        "title": "Renn Copilot: Show Provider Account Health"
+      }
+    ],
+    "configuration": {
+      "title": "Renn Copilot Bridge",
+      "properties": {
+        "rennCopilot.backendUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:4317",
+          "description": "Base URL of the renn-copilot backend (the same one the dashboard talks to)."
+        },
+        "rennCopilot.dashboardUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:3000",
+          "description": "URL of the renn-copilot Next.js dashboard."
+        },
+        "rennCopilot.autoSyncOnStartup": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically sync enabled models into Copilot's BYOK setting when VS Code starts."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --allow-missing-repository"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.6.0",
+    "@vscode/vsce": "^3.2.1"
+  }
+}

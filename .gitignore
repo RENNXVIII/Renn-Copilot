@@ -1,0 +1,24 @@
+# Root-level ignores. Each subproject (backend/, dashboard/, extension/) also
+# has its own .gitignore for build artifacts specific to that tool.
+
+# Dependencies
+node_modules/
+
+# Environment / secrets
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS / editor junk
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Generic build output (if ever produced at repo root)
+dist/
+build/

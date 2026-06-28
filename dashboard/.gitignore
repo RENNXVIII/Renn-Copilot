@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Production build (if exported)
+build/
+
+# Secrets / local config (real values; .env.example stays tracked)
+.env
+.env*.local
+
+# TypeScript incremental build cache
+*.tsbuildinfo
+next-env.d.ts
+
+# Logs
+*.log
+npm-debug.log*
+
+# Vercel (unused here, but harmless to keep ignored)
+.vercel
+
+# OS junk
+.DS_Store
