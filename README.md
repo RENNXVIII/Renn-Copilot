@@ -1,5 +1,7 @@
 # Renn Copilot
 
+<img width="1867" height="940" alt="image" src="https://github.com/user-attachments/assets/4c07e53e-e34f-46c3-9df2-31a17d9bf201" />
+
 Injects Gemini, Anthropic (Claude), and GPT models into GitHub Copilot Chat in VS Code, via
 [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and its OAuth logins
 (Antigravity, Claude web/Claude Code, Codex, plus Gemini CLI/Qwen/iFlow with a caveat
