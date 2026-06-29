@@ -13,6 +13,13 @@ const defaultState = {
   // the VS Code extension's status bar/tooltip -- replaces what used to be
   // a separate reveal/hide toggle on every individual row.
   revealEmails: false,
+  // Learned model id -> provider attributions, recorded only while exactly
+  // one OAuth provider is logged in (the only time CLIProxyAPI's flat
+  // /v1/models list is unambiguous). Consulted before guessProvider()'s
+  // name-based fallback so that logging into a second provider later
+  // doesn't re-misattribute ids we already know the real answer for.
+  // See model-catalog.js for the full rationale.
+  modelProviderMemory: {},
 };
 
 export function readState() {

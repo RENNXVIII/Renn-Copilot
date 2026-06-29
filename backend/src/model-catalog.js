@@ -41,6 +41,16 @@ export const MODEL_CATALOG = [
  *
  * Only when 0 or 2+ providers are logged in (genuinely ambiguous) do we fall
  * back to guessing from the model name, same buckets as the Providers page.
+ *
+ * CLIProxyAPI itself gives us no better signal here: its /v1/models response
+ * is a flat, unattributed list (confirmed against its source -- the registry
+ * keeps one entry per model id with no per-OAuth-account tag, and the
+ * `owned_by` field it does expose reflects the underlying model vendor, e.g.
+ * "anthropic", not which logged-in account is actually serving it). So once
+ * 2+ providers are logged in, there's no live API call that can tell us
+ * "this claude-named id is really coming through Antigravity" -- the only
+ * place that fact can live is in something *we* remember from before it
+ * became ambiguous. See resolveProvider() below for how that's used.
  */
 function guessProvider(id, loggedInProviders = []) {
   if (loggedInProviders.length === 1) return loggedInProviders[0];
@@ -48,8 +58,24 @@ function guessProvider(id, loggedInProviders = []) {
   const lower = id.toLowerCase();
   if (lower.includes("gemini")) return "antigravity"; // Gemini is Antigravity-only today
   if (lower.includes("claude")) return "claude";
-  if (lower.includes("gpt") || /\bo[134]\b/.test(lower)) return "codex";
+  if (lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)) return "codex";
   return "other";
+}
+
+/**
+ * Resolves a live model id to a provider, preferring (in order):
+ *  1. The unambiguous single-provider shortcut.
+ *  2. A previously-learned attribution (`memory[id]`), recorded the last
+ *     time this id was seen under shortcut #1 -- this is what keeps
+ *     Antigravity-served Claude/GPT-named ids pinned to "antigravity" even
+ *     after a second provider (e.g. Codex) logs in and re-introduces
+ *     ambiguity.
+ *  3. The name-based guess, only for ids we've never seen unambiguously.
+ */
+function resolveProvider(id, loggedInProviders, memory) {
+  if (loggedInProviders.length === 1) return loggedInProviders[0];
+  if (memory[id]) return memory[id];
+  return guessProvider(id, loggedInProviders);
 }
 
 /**
@@ -98,14 +124,21 @@ function buildCustomProviderIndex(openAiCompatEntries = []) {
  * *before* guessProvider/loggedInProviders ever run, so a custom provider
  * never gets misattributed to whichever single OAuth provider is logged in
  * (see buildCustomProviderIndex).
+ *
+ * `memory` is the persisted id -> provider map learned during past
+ * unambiguous (single-provider) calls (see resolveProvider doc above).
+ * Returns the updated memory alongside the model list -- the caller
+ * (routes.js) is responsible for persisting it via state.js so the learned
+ * attribution survives across requests and server restarts.
  */
-export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompatEntries = []) {
-  if (!liveIds.length) return [];
+export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompatEntries = [], memory = {}) {
+  if (!liveIds.length) return { models: [], memory };
 
   const byId = new Map(MODEL_CATALOG.map((m) => [m.id, m]));
   const customProviderById = buildCustomProviderIndex(openAiCompatEntries);
+  const nextMemory = { ...memory };
 
-  return liveIds.map((id) => {
+  const models = liveIds.map((id) => {
     const customProvider = customProviderById.get(id);
     if (customProvider) {
       return {
@@ -120,7 +153,8 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
     const known = byId.get(id);
     if (known) return known;
 
-    const provider = guessProvider(id, loggedInProviders);
+    const provider = resolveProvider(id, loggedInProviders, memory);
+    if (loggedInProviders.length === 1) nextMemory[id] = provider;
     return {
       id,
       provider,
@@ -129,6 +163,8 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
       thinking: /thinking/i.test(id),
     };
   });
+
+  return { models, memory: nextMemory };
 }
 
 /** Builds the entry shape expected by github.copilot.chat.customOAIModels. */

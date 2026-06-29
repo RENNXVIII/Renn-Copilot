@@ -309,8 +309,15 @@ async function getMergedCatalog() {
   ]);
   try {
     const liveIds = await listLiveModelIds();
+    const memory = readState().modelProviderMemory;
+    const { models, memory: nextMemory } = buildModelList(liveIds, loggedInProviders, openAiCompatEntries, memory);
+    // Only hits disk when a new id was actually learned (i.e. exactly one
+    // provider was logged in and we saw an id we hadn't seen before).
+    if (JSON.stringify(nextMemory) !== JSON.stringify(memory)) {
+      writeState({ modelProviderMemory: nextMemory });
+    }
     return {
-      catalog: buildModelList(liveIds, loggedInProviders, openAiCompatEntries),
+      catalog: models,
       source: liveIds.length ? "live" : "empty",
       liveError: null,
     };

@@ -16,6 +16,7 @@ const nextConfig = {
   // guess the wrong workspace root. Pin it explicitly so file tracing during
   // `next build` always uses this folder, regardless of lockfiles elsewhere.
   outputFileTracingRoot: __dirname,
+  devIndicators: false,
 };
 
 export default nextConfig;

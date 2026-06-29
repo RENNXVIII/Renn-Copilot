@@ -2,13 +2,17 @@
   "name": "renn-copilot",
   "displayName": "Renn Copilot Bridge",
   "description": "Thin bridge that syncs models from the renn-copilot dashboard into VS Code's BYOK \"Custom Endpoint\" provider (User/chatLanguageModels.json).",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "renn",
   "engines": {
     "vscode": "^1.95.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [

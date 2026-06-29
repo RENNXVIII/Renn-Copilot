@@ -1,9 +1,12 @@
 {
   "name": "renn-copilot",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Inject Gemini & Anthropic models into GitHub Copilot Chat via CLIProxyAPI, with a standalone config dashboard.",
-  "workspaces": ["backend", "dashboard"],
+  "workspaces": [
+    "backend",
+    "dashboard"
+  ],
   "scripts": {
     "dev": "concurrently -n backend,dashboard -c blue,magenta \"npm run backend:dev\" \"npm run dashboard:dev\"",
     "backend:dev": "npm run dev --workspace backend",
