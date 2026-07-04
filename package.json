@@ -1,7 +1,7 @@
 {
   "name": "renn-copilot",
   "private": true,
-  "version": "0.4.9",
+  "version": "0.4.10",
   "description": "Self-contained VS Code extension that injects Gemini & Anthropic models into GitHub Copilot Chat via CLIProxyAPI, with a built-in dashboard.",
   "scripts": {
     "backend:dev": "npm run dev --prefix extension/backend",

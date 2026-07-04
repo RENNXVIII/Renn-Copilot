@@ -1,4 +1,5 @@
 import type { DayUsage, UsageAccount, UsageApiKey } from "../api/client";
+import { maskEmail } from "../lib/utils";
 
 export function KpiCard({
   label,
@@ -23,11 +24,12 @@ export function KpiCard({
 }
 
 /** Compact one-line health row -- shared by Overview's summary and Models' provider list. */
-export function HealthRow({ usage }: { usage: UsageAccount | UsageApiKey }) {
+export function HealthRow({ usage, revealed = false }: { usage: UsageAccount | UsageApiKey; revealed?: boolean }) {
   const isAccount = "label" in usage;
   const critical = isAccount && (usage.disabled || usage.unavailable);
   const reason = !isAccount ? "Available" : usage.disabled ? "Inactive" : usage.unavailable ? "Quota exceeded" : "Available";
-  const label = isAccount ? usage.label : usage.name || usage.keyMasked;
+  const rawLabel = isAccount ? usage.label : usage.name || usage.keyMasked;
+  const label = isAccount && !revealed ? maskEmail(rawLabel) : rawLabel;
 
   return (
     <div className="health-row">

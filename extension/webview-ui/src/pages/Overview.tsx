@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
+import { useEmailReveal } from "../hooks/useEmailReveal";
 import { KpiCard, HealthRow, TrendChart, Checklist } from "../components/shared";
 
 const TOKEN_USAGE_DAYS = 7;
@@ -8,6 +9,7 @@ const TOKEN_USAGE_DAYS = 7;
 export function Overview({ onNavigate }: { onNavigate: (page: string) => void }) {
   const { data: status, mutate: refreshStatus } = usePolling(api.getStatus, 4000);
   const [busy, setBusy] = useState<string | null>(null);
+  const { revealed } = useEmailReveal();
 
   const serverRunning = status?.running ?? false;
   const { data: models } = usePolling(api.getModels, 15000, serverRunning);
@@ -130,10 +132,10 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
           {serverRunning && credentials.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
               {(usage?.accounts ?? []).slice(0, 4).map((a) => (
-                <HealthRow key={a.name} usage={a} />
+                <HealthRow key={a.name} usage={a} revealed={revealed} />
               ))}
               {(usage?.apiKeys ?? []).slice(0, Math.max(0, 4 - (usage?.accounts?.length ?? 0))).map((k, i) => (
-                <HealthRow key={`${k.provider}-${i}`} usage={k} />
+                <HealthRow key={`${k.provider}-${i}`} usage={k} revealed={revealed} />
               ))}
             </div>
           )}
