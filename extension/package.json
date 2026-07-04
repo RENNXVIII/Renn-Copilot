@@ -1,9 +1,10 @@
 {
   "name": "renn-copilot",
-  "displayName": "Renn Copilot Bridge",
-  "description": "Thin bridge that syncs models from the renn-copilot dashboard into VS Code's BYOK \"Custom Endpoint\" provider (User/chatLanguageModels.json).",
-  "version": "0.3.1",
-  "publisher": "renn",
+  "displayName": "Renn Copilot",
+  "description": "Self-contained CLIProxyAPI dashboard + BYOK model sync for GitHub Copilot Chat, entirely inside VS Code -- no separate terminal or browser tab needed.",
+  "version": "0.4.9",
+  "publisher": "RENNXVIII",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -21,18 +22,54 @@
         "title": "Renn Copilot: Sync Models from Dashboard"
       },
       {
-        "command": "rennCopilot.openDashboard",
-        "title": "Renn Copilot: Open Dashboard"
-      },
-      {
         "command": "rennCopilot.copyApiKey",
         "title": "Renn Copilot: Copy API Key to Clipboard"
       },
       {
         "command": "rennCopilot.showHealthDetails",
         "title": "Renn Copilot: Show Provider Account Health"
+      },
+      {
+        "command": "rennCopilot.startBackend",
+        "title": "Renn Copilot: Start Backend"
+      },
+      {
+        "command": "rennCopilot.stopBackend",
+        "title": "Renn Copilot: Stop Backend"
+      },
+      {
+        "command": "rennCopilot.openDashboardPanel",
+        "title": "Renn Copilot: Open Dashboard",
+        "icon": "$(dashboard)"
       }
     ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "rennCopilot",
+          "title": "Renn Copilot",
+          "icon": "media/activitybar-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "rennCopilot": [
+        {
+          "type": "webview",
+          "id": "rennCopilot.sidebarView",
+          "name": "Dashboard"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "rennCopilot.openDashboardPanel",
+          "when": "view == rennCopilot.sidebarView",
+          "group": "navigation"
+        }
+      ]
+    },
     "configuration": {
       "title": "Renn Copilot Bridge",
       "properties": {
@@ -41,15 +78,20 @@
           "default": "http://127.0.0.1:4317",
           "description": "Base URL of the renn-copilot backend (the same one the dashboard talks to)."
         },
-        "rennCopilot.dashboardUrl": {
-          "type": "string",
-          "default": "http://127.0.0.1:3000",
-          "description": "URL of the renn-copilot Next.js dashboard."
-        },
         "rennCopilot.autoSyncOnStartup": {
           "type": "boolean",
           "default": true,
           "description": "Automatically sync enabled models into Copilot's BYOK setting when VS Code starts."
+        },
+        "rennCopilot.autoStartBackend": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the renn-copilot backend when VS Code starts. Disable to start it manually via \"Renn Copilot: Start Backend\"."
+        },
+        "rennCopilot.autoStartServer": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically start the CLIProxyAPI server once the backend is up (same as clicking \"Start\" on the Overview page). Only takes effect once the binary has been installed at least once; has no effect if rennCopilot.autoStartBackend is disabled."
         }
       }
     }
@@ -58,7 +100,10 @@
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --allow-missing-repository"
+    "backend:install": "npm install --omit=dev --prefix backend",
+    "webview:install": "npm install --prefix webview-ui",
+    "webview:build": "npm run build --prefix webview-ui",
+    "package": "npm run backend:install && npm run webview:install && npm run webview:build && vsce package --allow-missing-repository"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

@@ -18,6 +18,11 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+# ...except extension/'s launch/task config -- committed so F5 (Run Extension)
+# works out of the box for anyone who opens extension/ as their workspace.
+!extension/.vscode/
+!extension/.vscode/launch.json
+!extension/.vscode/tasks.json
 
 # Generic build output (if ever produced at repo root)
 dist/

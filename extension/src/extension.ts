@@ -4,6 +4,9 @@ import * as http from "node:http";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as backendManager from "./backend-manager";
+import { openDashboardPanel } from "./webview-panel";
+import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
 
 // As of VS Code's June 2026 BYOK overhaul, github.copilot.chat.customOAIModels
 // is deprecated and no longer read by the model picker. The current mechanism
@@ -88,7 +91,17 @@ interface HealthEntry {
 let statusBarItem: vscode.StatusBarItem;
 let healthStatusBarItem: vscode.StatusBarItem;
 let healthTimer: ReturnType<typeof setInterval> | undefined;
+let healthFastRetryTimer: ReturnType<typeof setTimeout> | undefined;
+let healthFastRetriesLeft = 0;
 let lastHealthAccounts: HealthEntry[] = [];
+
+// While the backend/CLIProxyAPI are still spinning up (right after
+// activation, or right after a manual/auto "start"), a health check can fail
+// simply because the port isn't bound yet -- not a real problem. Rather than
+// showing a stale "couldn't check" state for a full HEALTH_REFRESH_MS (30s),
+// retry a few times at a much shorter interval until it succeeds.
+const HEALTH_FAST_RETRY_MS = 2000;
+const HEALTH_FAST_RETRY_MAX = 10; // ~20s of fast polling, then fall back to the normal 30s cadence
 
 // Mirrors the dashboard's single global "Reveal emails" toggle (on the
 // Providers page), persisted backend-side at GET/PUT /api/preferences -- so
@@ -120,30 +133,95 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("rennCopilot.syncModels", () => syncModels(true))
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand("rennCopilot.openDashboard", openDashboard)
-  );
-  context.subscriptions.push(
     vscode.commands.registerCommand("rennCopilot.copyApiKey", copyApiKey)
   );
   context.subscriptions.push(
-    vscode.commands.registerCommand("rennCopilot.showHealthDetails", showHealthDetails)
+    vscode.commands.registerCommand("rennCopilot.showHealthDetails", () => showHealthDetails(context))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.startBackend", () => startBackendCommand(context))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.stopBackend", stopBackendCommand)
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.openDashboardPanel", () => openDashboardPanel(context))
+  );
+
+  context.subscriptions.push(
+    vscode.window.registerWebviewViewProvider(SIDEBAR_VIEW_ID, new RennSidebarViewProvider(context), {
+      webviewOptions: { retainContextWhenHidden: true },
+    })
   );
 
   const config = vscode.workspace.getConfiguration("rennCopilot");
+
+  if (config.get<boolean>("autoStartBackend", true)) {
+    // Fire-and-forget -- don't block activation on the backend coming up.
+    backendManager.startBackend(context);
+    armHealthFastRetries();
+  }
+
   if (config.get<boolean>("autoSyncOnStartup", true)) {
-    // Don't block activation on the network call.
-    void syncModels(false);
+    // Don't block activation on the network call. Wait for the backend to
+    // actually be reachable first -- right after activation (especially when
+    // autoStartBackend just spawned it) the port isn't bound yet for the
+    // first second or so, and a sync attempt during that window used to fail
+    // outright with ECONNREFUSED instead of just... waiting a moment.
+    const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
+    void waitForBackendReady(backendUrl).then(() => syncModels(false));
   }
 
   void refreshHealth();
   healthTimer = setInterval(() => void refreshHealth(), HEALTH_REFRESH_MS);
   context.subscriptions.push({ dispose: () => clearInterval(healthTimer) });
+  context.subscriptions.push({ dispose: () => clearTimeout(healthFastRetryTimer) });
 }
 
-export function deactivate() {
+export async function deactivate() {
   statusBarItem?.dispose();
   healthStatusBarItem?.dispose();
   clearInterval(healthTimer);
+  clearTimeout(healthFastRetryTimer);
+
+  const config = vscode.workspace.getConfiguration("rennCopilot");
+  const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
+  await backendManager.stopBackend(backendUrl);
+}
+
+/** Polls the backend's root endpoint until it responds, or gives up after timeoutMs. */
+async function waitForBackendReady(backendUrl: string, timeoutMs = 15000): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await fetchJson(`${backendUrl}/`);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+}
+
+async function startBackendCommand(context: vscode.ExtensionContext) {
+  if (backendManager.isRunning()) {
+    void vscode.window.showInformationMessage("Renn Copilot: backend is already running.");
+    return;
+  }
+  backendManager.startBackend(context);
+  void vscode.window.showInformationMessage("Renn Copilot: starting backend...");
+  armHealthFastRetries();
+}
+
+async function stopBackendCommand() {
+  if (!backendManager.isRunning()) {
+    void vscode.window.showInformationMessage("Renn Copilot: backend is not running.");
+    return;
+  }
+  const config = vscode.workspace.getConfiguration("rennCopilot");
+  const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
+  void vscode.window.showInformationMessage("Renn Copilot: stopping backend...");
+  await backendManager.stopBackend(backendUrl);
+  void refreshHealth();
 }
 
 /**
@@ -198,10 +276,23 @@ async function refreshHealth() {
 
     healthStatusBarItem.text = unavailable > 0 ? `🟢 ${available}  🔴 ${unavailable}` : `🟢 ${available}`;
     healthStatusBarItem.tooltip = buildHealthTooltip();
+    healthFastRetriesLeft = 0; // reachable again -- stop any fast-retry loop in flight
   } catch (err: any) {
     healthStatusBarItem.text = "⚪ --";
     healthStatusBarItem.tooltip = `Renn Copilot: couldn't check account health (${err.message}). Is the backend running?`;
+    if (healthFastRetriesLeft > 0) {
+      healthFastRetriesLeft--;
+      clearTimeout(healthFastRetryTimer);
+      healthFastRetryTimer = setTimeout(() => void refreshHealth(), HEALTH_FAST_RETRY_MS);
+    }
   }
+}
+
+/** Arms a burst of fast retries -- call whenever the backend is known to be (re)starting. */
+function armHealthFastRetries() {
+  healthFastRetriesLeft = HEALTH_FAST_RETRY_MAX;
+  clearTimeout(healthFastRetryTimer);
+  healthFastRetryTimer = setTimeout(() => void refreshHealth(), HEALTH_FAST_RETRY_MS);
 }
 
 function buildHealthTooltip(): vscode.MarkdownString {
@@ -217,13 +308,13 @@ function buildHealthTooltip(): vscode.MarkdownString {
   return md;
 }
 
-async function showHealthDetails() {
+async function showHealthDetails(context: vscode.ExtensionContext) {
   if (!lastHealthAccounts.length) {
     const choice = await vscode.window.showInformationMessage(
       "Renn Copilot: no stored provider accounts found yet.",
       "Open Dashboard"
     );
-    if (choice === "Open Dashboard") openDashboard();
+    if (choice === "Open Dashboard") openDashboardPanel(context);
     return;
   }
 
@@ -241,13 +332,7 @@ async function showHealthDetails() {
     title: "Renn Copilot — provider account health",
     placeHolder: "Select an account to open the dashboard's Providers page (login/quota actions)",
   });
-  if (picked) openDashboard();
-}
-
-function openDashboard() {
-  const config = vscode.workspace.getConfiguration("rennCopilot");
-  const url = config.get<string>("dashboardUrl", "http://127.0.0.1:3000");
-  void vscode.env.openExternal(vscode.Uri.parse(url));
+  if (picked) openDashboardPanel(context);
 }
 
 /**
@@ -300,6 +385,16 @@ async function syncModels(showNotifications: boolean) {
     // refresh on it so the dot count doesn't lag behind a manual re-sync.
     void refreshHealth();
 
+    // Only touch the clipboard when the provider entry actually changed --
+    // that's exactly the case where VS Code will need the key re-pasted
+    // (a brand new entry, or an existing one whose content moved). A no-op
+    // sync means the file (and therefore any previously-entered key) is
+    // untouched, so overwriting the user's clipboard on every silent
+    // startup sync would just be an annoying side effect for no reason.
+    if (changed && remote.apiKey) {
+      await vscode.env.clipboard.writeText(remote.apiKey);
+    }
+
     if (showNotifications) {
       if (!changed) {
         // Nothing actually changed -- don't touch the file (see writeProviderEntry's
@@ -307,17 +402,26 @@ async function syncModels(showNotifications: boolean) {
         return;
       }
       const reload = "Reload Window";
+      const keyNote = remote.apiKey
+        ? `The API key was copied to your clipboard -- paste it in with Ctrl+V (Cmd+V on Mac) and press Enter.`
+        : `Backend didn't return an API key yet -- run "Renn Copilot: Copy API Key to Clipboard" once it has.`;
       const message = created
         ? `Added "${PROVIDER_NAME}" as a new Custom Endpoint provider with ${remote.models.length} model(s). ` +
           `Reload VS Code, then open "Chat: Manage Language Models" and enter the API key for "${PROVIDER_NAME}" ` +
-          `once (VS Code stores it separately from this file, so it needs to be pasted in manually here).`
+          `once (VS Code stores it separately from this file). ${keyNote}`
         : `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" Custom Endpoint provider. ` +
-          `Reload VS Code, then check the model picker. If the API key was previously entered via ` +
-          `"Chat: Manage Language Models", it should still be intact since the file content didn't otherwise change.`;
+          `Reload VS Code, then check the model picker -- you may need to re-enter the API key. ${keyNote}`;
       const choice = await vscode.window.showInformationMessage(message, reload);
       if (choice === reload) {
         void vscode.commands.executeCommand("workbench.action.reloadWindow");
       }
+    } else if (changed && remote.apiKey) {
+      // Silent startup sync that still changed the file (e.g. the very
+      // first sync after installing) -- a toast is warranted here since
+      // there's no other visible feedback, but keep it short.
+      void vscode.window.showInformationMessage(
+        `Renn Copilot: synced ${remote.models.length} model(s). API key copied to clipboard -- paste it into "Chat: Manage Language Models" when prompted.`
+      );
     }
   } catch (err: any) {
     statusBarItem.text = "$(error) Renn Copilot";

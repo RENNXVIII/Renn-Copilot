@@ -1,0 +1,29 @@
+.vscode/**
+.vscode-test/**
+src/**
+webview-ui/src/**
+webview-ui/node_modules/**
+webview-ui/*.config.*
+webview-ui/tsconfig.json
+webview-ui/index.html
+webview-ui/package.json
+webview-ui/package-lock.json
+.gitignore
+.vscodeignore
+tsconfig.json
+**/*.map
+**/.eslintrc*
+**/*.vsix
+backend/.env
+backend/.env.example
+backend/.gitignore
+backend/_probe.txt
+scripts/**
+# Self-referencing symlink some local tooling adds to backend/node_modules --
+# not a real dependency, and vsce's zipper (yazl) can't package a symlink.
+backend/node_modules/renn-copilot/**
+backend/node_modules/renn-copilot
+
+# Keep: out/**, backend/src/**, backend/package.json, backend/node_modules/**,
+# media/webview/** -- these ship inside the VSIX so the extension is
+# self-contained (no separate npm install step for the end user).

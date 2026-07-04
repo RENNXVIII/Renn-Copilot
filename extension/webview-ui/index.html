@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Renn Copilot Dashboard (dev)</title>
+  </head>
+  <body>
+    <!-- Dev-only entry (`npm run dev`) -- not used by the extension at runtime,
+         which loads media/webview/bundle.js directly via webview-html.ts. -->
+    <script>
+      window.__RENN_BACKEND_URL__ = "http://127.0.0.1:4317";
+    </script>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
