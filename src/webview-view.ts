@@ -22,7 +22,7 @@ export class RennSidebarViewProvider implements vscode.WebviewViewProvider {
     const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
     webviewView.webview.html = getWebviewHtml(webviewView.webview, this.context.extensionUri, backendUrl, "sidebar");
 
-    webviewView.webview.onDidReceiveMessage((message) => {
+    webviewView.webview.onDidReceiveMessage((message: any) => {
       switch (message?.command) {
         case "openDashboardPanel":
           openDashboardPanel(this.context, message.page);

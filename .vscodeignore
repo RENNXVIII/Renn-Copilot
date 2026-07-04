@@ -18,7 +18,11 @@ backend/.env
 backend/.env.example
 backend/.gitignore
 backend/_probe.txt
+backend/*.log
 scripts/**
+# Standalone diagnostic proxy documented in README.md -- run manually with
+# `node logging-proxy.js`, not something the packaged extension needs.
+logging-proxy.js
 # Self-referencing symlink some local tooling adds to backend/node_modules --
 # not a real dependency, and vsce's zipper (yazl) can't package a symlink.
 backend/node_modules/renn-copilot/**

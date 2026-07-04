@@ -1,6 +1,3 @@
-# Root-level ignores. Each subproject (backend/, dashboard/, extension/) also
-# has its own .gitignore for build artifacts specific to that tool.
-
 # Dependencies
 node_modules/
 
@@ -8,6 +5,17 @@ node_modules/
 .env
 .env.local
 .env.*.local
+
+# Compiled output (rebuilt via `npm run compile` / vscode:prepublish)
+out/
+dist/
+build/
+
+# Packaged extension (.vsix) -- rebuilt via `npm run package`
+*.vsix
+
+# VS Code extension test runner cache
+.vscode-test/
 
 # Logs
 *.log
@@ -18,12 +26,8 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
-# ...except extension/'s launch/task config -- committed so F5 (Run Extension)
-# works out of the box for anyone who opens extension/ as their workspace.
-!extension/.vscode/
-!extension/.vscode/launch.json
-!extension/.vscode/tasks.json
-
-# Generic build output (if ever produced at repo root)
-dist/
-build/
+# ...except this repo's own launch/task config -- committed so F5 (Run
+# Extension) works out of the box for anyone who opens this repo in VS Code.
+!.vscode/
+!.vscode/launch.json
+!.vscode/tasks.json

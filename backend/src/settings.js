@@ -1,9 +1,6 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url)); // backend/src
 
 /**
  * Resolves ~ to the user's home directory and expands env-style defaults.
@@ -52,9 +49,4 @@ export function managementBaseUrl() {
 
 export function proxyBaseUrl() {
   return `http://${settings.cliproxyHost}:${settings.cliproxyPort}`;
-}
-
-/** Resolves the extension/ folder (backend now lives at extension/backend/) regardless of cwd. */
-export function extensionDir() {
-  return path.resolve(__dirname, "../..");
 }

@@ -12,9 +12,9 @@ terminal, no browser tab, no other process to start by hand:
 
 | Path | What it is |
 |---|---|
-| `extension/src/` | The extension host: commands, status bar, backend lifecycle (spawn/stop), and the dashboard's webview panel + sidebar view. |
-| `extension/backend/` | Node/Express service, vendored inside the extension. Installs and runs the CLIProxyAPI binary, bridges its Management API, polls usage. Spawned automatically by the extension (or manually, see below) — you never run `npm run dev` for this yourself. |
-| `extension/webview-ui/` | The dashboard itself: a small React app that renders inside a VS Code webview (editor tab or Activity Bar sidebar), styled with VS Code's own theme variables. Talks to `extension/backend/` directly over HTTP. |
+| `src/` | The extension host: commands, status bar, backend lifecycle (spawn/stop), and the dashboard's webview panel + sidebar view. |
+| `backend/` | Node/Express service, vendored inside the extension. Installs and runs the CLIProxyAPI binary, bridges its Management API, polls usage. Spawned automatically by the extension — you never run `npm run dev` for this yourself. |
+| `webview-ui/` | The dashboard itself: a small React app that renders inside a VS Code webview (editor tab or Activity Bar sidebar), styled with VS Code's own theme variables. Talks to `backend/` directly over HTTP. |
 
 The extension is intentionally the *only* thing that touches `chatLanguageModels.json`,
 and only through reading/writing that one file directly, replacing just the single entry
@@ -25,9 +25,7 @@ by the extension), not as a public multi-tenant service.
 
 ## Dashboard
 
-Two ways in, same backend either way:
-
-- **Command Palette → "Renn Copilot: Open Dashboard"** — the full dashboard as an editor tab, with 6 pages:
+- **Command Palette → "Renn Copilot: Open Dashboard"** — the full dashboard as an editor tab:
 
   | Page | What it does |
   |---|---|
@@ -38,9 +36,9 @@ Two ways in, same backend either way:
   | Logs | Live tail of CLIProxyAPI's own request log and the backend's own process log, with search, copy, and download. |
   | Config | Raw `config.yaml` editor (hidden by default), routing strategy (round-robin / fill-first), discard/save. |
 
-- **Activity Bar icon** — a compact sidebar view instead of the full 6-page layout (it's
-  narrow by nature): server status + Start/Stop/Restart, a one-line health summary, enabled
-  model count with a link straight to the Models page, and quick buttons for Sync Models /
+- **Activity Bar icon** — a compact sidebar (deliberately not a squeezed-down copy of all
+  6 pages): server status with Start/Stop/Restart, a one-line health summary, enabled
+  model count linking straight to the Models page, and quick buttons for Sync Models /
   Copy API Key / Open Full Dashboard.
 
 ## Setup
@@ -52,19 +50,19 @@ inside it, so nothing else needs installing on the machine running VS Code.
 Building from source:
 
 ```bash
-cd extension && npm install
-cd backend && npm install
-cd ../webview-ui && npm install
+npm install
+npm install --prefix backend
+npm install --prefix webview-ui
 ```
 
-Then, from `extension/`:
+Then, from the repo root:
 
 ```bash
 npm run package   # builds the webview, installs backend deps, produces a .vsix via vsce
 ```
 
 Install the generated `.vsix` (Extensions panel → "..." → Install from VSIX), or run it
-from source via the VS Code Extension Development Host (press **F5** with `extension/`
+from source via the VS Code Extension Development Host (press **F5** with this repo
 open as the workspace) while iterating.
 
 ## Settings
@@ -86,11 +84,11 @@ open as the workspace) while iterating.
 
 ## Typical flow
 
-1. Install the extension. The backend spawns automatically (unless you disabled auto-start).
-2. Open the dashboard (Command Palette or Activity Bar icon). On Overview, click "Install / Update binary" once, then "Start".
+1. Install the extension. The backend (and, by default, the CLIProxyAPI server once its binary is installed) spawn automatically.
+2. Open the dashboard (Command Palette or Activity Bar icon). On first run, click "Install / Update binary" once on the Overview page.
 3. On Providers & Login, click "Login" for each provider you use — this opens the OAuth page in your browser; the dashboard polls until the token lands.
 4. On Models, toggle which models should be exposed to Copilot Chat.
-5. Reload VS Code (models sync on startup by default, or run "Renn Copilot: Sync Models" manually) — whenever the synced model list actually changes, the API key is copied to your clipboard automatically. Open Copilot Chat's model picker → "Manage Models..." and click the eye icon next to the new entries to enable them; VS Code will prompt for the API key the first time, just paste (Ctrl+V / Cmd+V) and press Enter — VS Code doesn't read the key from any file, so this one paste can't be automated further, but you won't need to go dig it up yourself.
+5. Reload VS Code (models sync on startup by default, or run "Renn Copilot: Sync Models" manually) — whenever the synced model list actually changes, the API key is copied to your clipboard automatically. Open Copilot Chat's model picker → "Manage Models..." and click the eye icon next to the new entries to enable them; when VS Code prompts for the API key, just paste (Ctrl+V / Cmd+V) and press Enter.
 
 ## Troubleshooting
 
@@ -112,9 +110,9 @@ open as the workspace) while iterating.
 
 - **Gemini CLI / Qwen / iFlow OAuth**: CLIProxyAPI's Management API only exposes
   ready-made OAuth-URL endpoints for `antigravity`, `anthropic` (Claude), and `codex`
-  (see `extension/backend/src/management-client.js`). The other three providers currently
+  (see `backend/src/management-client.js`). The other three providers currently
   require driving CLIProxyAPI's own CLI `--login` flags directly on the machine running
-  the backend; that flow isn't wired into the dashboard yet. `extension/backend/src/routes.js`
+  the backend; that flow isn't wired into the dashboard yet. `backend/src/routes.js`
   returns a clear 400 explaining this if you try to log in to one of them from the UI.
 - **No automated tests** yet — changes are currently verified by `tsc` (extension host +
   webview) and manual smoke-testing against a running CLIProxyAPI instance.
