@@ -91,6 +91,7 @@ export function Providers() {
   const [selectedGroup, setSelectedGroup] = useState("antigravity");
   const [customGroups, setCustomGroups] = useState<Record<string, string>>({});
   const [resetting, setResetting] = useState<Record<string, boolean>>({});
+  const [restarting, setRestarting] = useState(false);
   const { revealed, toggle: toggleRevealed } = useEmailReveal();
 
   useEffect(() => {
@@ -169,6 +170,22 @@ export function Providers() {
       await api.resetQuota(f.auth_index);
     } finally {
       setResetting((s) => ({ ...s, [f.name]: false }));
+      mutate(undefined, true);
+    }
+  }
+
+  // CLIProxyAPI's Management API has no endpoint to re-validate a single
+  // credential's `status` field on demand (confirmed against its docs) --
+  // that field only seems to get refreshed when CLIProxyAPI itself restarts
+  // and re-reads every auth file. So a stale "error" badge on an account
+  // that's actually working again (e.g. after a quota issue resolved) can
+  // only be cleared by restarting the whole server, not per-credential.
+  async function restartServer() {
+    setRestarting(true);
+    try {
+      await api.restart();
+    } finally {
+      setRestarting(false);
       mutate(undefined, true);
     }
   }
@@ -256,7 +273,16 @@ export function Providers() {
                     Quota exceeded{formatNextRetry(f.next_retry_after) ? ` · retry ~${formatNextRetry(f.next_retry_after)}` : ""}
                   </span>
                 )}
-                <span className={`badge ${f.status === "ready" ? "success" : "neutral"}`}>{f.status}</span>
+                <span
+                  className={`badge ${f.status === "ready" ? "success" : "neutral"}`}
+                  title={
+                    f.status !== "ready"
+                      ? "Raw status reported by CLIProxyAPI -- can lag behind reality (e.g. still show \"error\" after a resolved quota issue) until CLIProxyAPI restarts."
+                      : undefined
+                  }
+                >
+                  {f.status}
+                </span>
                 <span className="card-desc">{f.disabled ? "Inactive" : "Active"}</span>
                 <input type="checkbox" className="toggle" checked={!f.disabled} onChange={(e) => toggleActive(f, e.target.checked)} />
                 <button
@@ -428,9 +454,19 @@ export function Providers() {
             <div className="card-title">Stored credentials</div>
             <div className="card-desc">Accounts and keys CLIProxyAPI currently has, grouped by provider.</div>
           </div>
-          <button className="btn secondary" onClick={() => toggleRevealed()}>
-            {revealed ? "Hide emails" : "Reveal emails"}
-          </button>
+          <div className="btn-row">
+            <button
+              className="btn secondary"
+              disabled={restarting || !serverRunning}
+              title="CLIProxyAPI only re-checks a credential's status when it restarts -- use this if a badge below still says 'error' even though the account works fine now."
+              onClick={restartServer}
+            >
+              {restarting ? "Restarting..." : "Restart CLIProxyAPI"}
+            </button>
+            <button className="btn secondary" onClick={() => toggleRevealed()}>
+              {revealed ? "Hide emails" : "Reveal emails"}
+            </button>
+          </div>
         </div>
         <div className="credentials-panel">
           <div className="credentials-sidebar">
