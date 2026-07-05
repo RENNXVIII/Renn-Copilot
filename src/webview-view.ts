@@ -33,6 +33,11 @@ export class RennSidebarViewProvider implements vscode.WebviewViewProvider {
         case "copyApiKey":
           void vscode.commands.executeCommand("rennCopilot.copyApiKey");
           break;
+        case "openExternal":
+          if (typeof message.url === "string") {
+            void vscode.env.openExternal(vscode.Uri.parse(message.url));
+          }
+          break;
       }
     });
   }

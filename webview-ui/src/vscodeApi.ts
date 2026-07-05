@@ -23,3 +23,13 @@ export function postSyncModels() {
 export function postCopyApiKey() {
   getVsCodeApi().postMessage({ command: "copyApiKey" });
 }
+
+/**
+ * Opens a URL in the user's real system browser via vscode.env.openExternal.
+ * A plain `window.open()` call inside a VS Code webview does not reliably
+ * open the system browser (webviews run in a sandboxed Electron context,
+ * not a normal browser tab) -- OAuth login buttons need this instead.
+ */
+export function postOpenExternal(url: string) {
+  getVsCodeApi().postMessage({ command: "openExternal", url });
+}

@@ -28,6 +28,15 @@ export function openDashboardPanel(context: vscode.ExtensionContext, initialPage
 
   currentPanel.webview.html = getWebviewHtml(currentPanel.webview, context.extensionUri, backendUrl, "panel", initialPage);
 
+  currentPanel.webview.onDidReceiveMessage((message: any) => {
+    // A plain window.open() inside a webview doesn't reliably reach the
+    // user's real browser (Electron sandboxing) -- OAuth login buttons
+    // route through here instead so vscode.env.openExternal can do it properly.
+    if (message?.command === "openExternal" && typeof message.url === "string") {
+      void vscode.env.openExternal(vscode.Uri.parse(message.url));
+    }
+  });
+
   currentPanel.onDidDispose(
     () => {
       currentPanel = undefined;

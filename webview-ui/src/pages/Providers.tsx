@@ -5,6 +5,7 @@ import { useEmailReveal } from "../hooks/useEmailReveal";
 import { loadCustomGroups, saveCustomGroups } from "../lib/custom-groups";
 import { maskKey } from "../lib/utils";
 import { Modal, ModalHeader, MaskedEmail } from "../components/Modal";
+import { postOpenExternal } from "../vscodeApi";
 
 const PROVIDER_CARDS: {
   id: "antigravity" | "claude" | "codex";
@@ -185,7 +186,7 @@ export function Providers() {
     setLoginStates((s) => ({ ...s, [provider]: "waiting" }));
     try {
       const { url, state } = await api.startLogin(provider);
-      window.open(url, "_blank", "noopener,noreferrer");
+      postOpenExternal(url);
       pollLogin(provider, state);
     } catch (err: any) {
       setLoginStates((s) => ({ ...s, [provider]: "error" }));
