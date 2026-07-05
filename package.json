@@ -2,7 +2,7 @@
   "name": "renn-copilot",
   "displayName": "Renn Copilot",
   "description": "Self-contained CLIProxyAPI dashboard + BYOK model sync for GitHub Copilot Chat, entirely inside VS Code -- no separate terminal or browser tab needed.",
-  "version": "0.4.11",
+  "version": "0.4.12",
   "publisher": "RENNXVIII",
   "icon": "media/icon.png",
   "engines": {

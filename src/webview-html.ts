@@ -23,12 +23,18 @@ export function getWebviewHtml(
   // to blocking all outbound fetch, which is the most likely early bug to
   // hit here (silently rejected requests, no console error unless DevTools
   // is open). img-src 'self' data: covers any inline/data-uri icons later.
+  //
+  // Scoped to just the configured backend origin (not a wildcard across all
+  // local ports) -- the backend has no auth of its own, so keeping this
+  // narrow limits what a compromised bundle could reach even in a
+  // supply-chain/XSS scenario, instead of exposing every other local service
+  // the user happens to be running.
   const csp = [
     `default-src 'none'`,
     `img-src ${webview.cspSource} data:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `script-src 'nonce-${nonce}'`,
-    `connect-src ${backendUrl} http://127.0.0.1:* http://localhost:*`,
+    `connect-src ${backendUrl}`,
   ].join("; ");
 
   return /* html */ `<!doctype html>
