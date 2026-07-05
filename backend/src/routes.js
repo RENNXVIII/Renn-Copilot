@@ -302,12 +302,21 @@ async function getOpenAiCompatEntries() {
 // the next time that id shows up unprobed.
 const visionProbeInFlight = new Set();
 
+// An inconclusive probe (quota/rate-limit/auth/transient error) used to not
+// get cached at all, so the very next GET /models poll (every ~15s from the
+// dashboard) would immediately fire another real request against the same
+// still-rate-limited account -- forever, since a quota-exceeded account
+// never gets a chance to recover between attempts. This cooldown makes
+// retries wait instead of hammering the account continuously.
+const PROBE_RETRY_COOLDOWN_MS = 15 * 60 * 1000;
+
 /**
- * Fires (but does not await) a vision probe for `modelId` if -- and only if
- * -- it has never been probed before. Results are written to state.js's
- * modelCapabilities so this never runs twice for the same id automatically;
- * the dashboard's manual "Re-check" action is the only way to re-probe an id
- * that already has an entry (see the /models/:id/verify-vision route below).
+ * Fires (but does not await) a vision probe for `modelId` if it has never
+ * been probed before, or if its last attempt was inconclusive and the retry
+ * cooldown has elapsed. Results are written to state.js's modelCapabilities;
+ * the dashboard's manual "Re-check" action bypasses this entirely (see the
+ * /models/:id/verify-vision route below), for probing on demand regardless
+ * of cooldown.
  *
  * Deliberately fire-and-forget: probing means a real chat-completion request
  * against a live OAuth account, which can take a few seconds, and the
@@ -317,7 +326,13 @@ const visionProbeInFlight = new Set();
  */
 function ensureVisionProbed(modelId) {
   const existing = readState().modelCapabilities || {};
-  if (existing[modelId] || visionProbeInFlight.has(modelId)) return;
+  const entry = existing[modelId];
+  if (visionProbeInFlight.has(modelId)) return;
+  if (entry) {
+    const isRetryableUnknown =
+      entry.vision === "unknown" && (!entry.lastAttemptAt || Date.now() - entry.lastAttemptAt > PROBE_RETRY_COOLDOWN_MS);
+    if (!isRetryableUnknown) return;
+  }
 
   visionProbeInFlight.add(modelId);
   probeVisionSupport(modelId)
@@ -326,18 +341,17 @@ function ensureVisionProbed(modelId) {
       writeState({ modelCapabilities: { ...current, [modelId]: { ...result, checkedAt: Date.now() } } });
     })
     .catch((err) => {
-      if (err.inconclusive) {
-        // Don't cache inconclusive results -- whatever caused it (quota,
-        // auth, transient error) may have cleared by the next /models poll,
-        // and caching "unknown" here would permanently block the one signal
-        // (no existing entry) that lets this id get probed again.
-        console.warn(`Vision probe for "${modelId}" inconclusive, will retry later: ${err.message}`);
-        return;
-      }
+      // Cache even inconclusive results (with a timestamp) so the next
+      // automatic attempt waits out the cooldown instead of retrying
+      // immediately on every poll -- the manual "Re-check" button is still
+      // available for an on-demand retry sooner than that.
       const current = readState().modelCapabilities || {};
       writeState({
-        modelCapabilities: { ...current, [modelId]: { vision: "unknown", note: err.message, checkedAt: Date.now() } },
+        modelCapabilities: { ...current, [modelId]: { vision: "unknown", note: err.message, lastAttemptAt: Date.now() } },
       });
+      if (err.inconclusive) {
+        console.warn(`Vision probe for "${modelId}" inconclusive, will retry in ~15m: ${err.message}`);
+      }
     })
     .finally(() => visionProbeInFlight.delete(modelId));
 }

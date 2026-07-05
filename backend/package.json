@@ -1,6 +1,6 @@
 {
   "name": "renn-copilot-backend",
-  "version": "0.4.13",
+  "version": "0.4.14",
   "description": "Lifecycle manager + Management API bridge for CLIProxyAPI, used by renn-copilot dashboard and VS Code extension.",
   "type": "module",
   "main": "src/index.js",

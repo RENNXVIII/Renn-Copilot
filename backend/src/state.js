@@ -23,11 +23,15 @@ const defaultState = {
   // Verified (not guessed) per-model capability results, keyed by model id.
   // Populated by routes.js's ensureVisionProbed()/the manual verify-vision
   // endpoint, which actually sends a tiny test image through CLIProxyAPI
-  // rather than assuming every model supports it. Each entry looks like
-  // { vision: true | false | "unknown", note?: string, checkedAt: number }.
-  // Once an id has an entry here it is never auto-probed again (avoids
-  // silently burning quota on every /models poll) -- only the dashboard's
-  // manual "Re-check" action re-probes an already-checked id.
+  // rather than assuming every model supports it. A resolved entry looks
+  // like { vision: true | false, note?: string, checkedAt: number } and is
+  // never auto-probed again. An inconclusive attempt (quota/rate-limit/auth/
+  // transient error) looks like { vision: "unknown", note?: string,
+  // lastAttemptAt: number } and is only eligible for another automatic probe
+  // once PROBE_RETRY_COOLDOWN_MS has elapsed -- otherwise every /models poll
+  // (every ~15s from the dashboard) would keep firing real requests against
+  // a still-rate-limited account indefinitely. The dashboard's manual
+  // "Re-check" action bypasses the cooldown for an on-demand retry.
   modelCapabilities: {},
 };
 
