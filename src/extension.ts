@@ -27,7 +27,7 @@ const PROVIDER_VENDOR = "customendpoint";
 const API_TYPE = "chat-completions"; // CLIProxyAPI exposes an OpenAI-compatible /v1/chat/completions surface
 
 function getRequireApiKey(): boolean {
-  return vscode.workspace.getConfiguration("rennCopilot").get<boolean>("requireApiKey", true);
+  return vscode.workspace.getConfiguration("rennCopilot").get<boolean>("requireApiKey", false);
 }
 
 /**

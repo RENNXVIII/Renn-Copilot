@@ -2,7 +2,7 @@
   "name": "renn-copilot",
   "displayName": "Renn Copilot",
   "description": "Self-contained CLIProxyAPI dashboard + BYOK model sync for GitHub Copilot Chat, entirely inside VS Code -- no separate terminal or browser tab needed.",
-  "version": "0.4.15",
+  "version": "0.4.16",
   "publisher": "RENNXVIII",
   "icon": "media/icon.png",
   "engines": {
@@ -95,8 +95,8 @@
         },
         "rennCopilot.requireApiKey": {
           "type": "boolean",
-          "default": true,
-          "description": "Whether the Custom Endpoint provider requires an API key. Turn off if \"Chat: Manage Language Models\" never shows a prompt to enter one and chat requests fail with 401 -- the backend is then switched to run without proxy authentication instead."
+          "default": false,
+          "description": "Whether the Custom Endpoint provider requires an API key. Off by default since several VS Code builds never show a prompt to enter one (causing every chat request to fail with 401) -- the backend runs without proxy authentication instead. Turn on if your VS Code build does prompt for the key and you'd rather keep the proxy authenticated."
         }
       }
     }
