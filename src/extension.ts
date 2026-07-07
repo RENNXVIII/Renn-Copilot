@@ -7,15 +7,16 @@ import * as os from "node:os";
 import * as backendManager from "./backend-manager";
 import { openDashboardPanel } from "./webview-panel";
 import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
-import { GENERATED_PROVIDER_VENDOR } from "./generated-provider";
 
 // As of VS Code's June 2026 BYOK overhaul, github.copilot.chat.customOAIModels
-// is deprecated and no longer read by the model picker. The current mechanism
-// is the "Custom Endpoint" provider, configured via a separate JSON file
-// (User/chatLanguageModels.json in the VS Code profile dir) rather than
-// settings.json. See https://code.visualstudio.com/docs/agent-customization/language-models
+// is deprecated and no longer read by the model picker (confirmed: VS Code
+// even refuses to write it via the configuration API now, "not a registered
+// configuration"). The current mechanism is the "Custom Endpoint" provider,
+// configured via a separate JSON file (User/chatLanguageModels.json in the
+// VS Code profile dir) rather than settings.json.
+// See https://code.visualstudio.com/docs/agent-customization/language-models
 const PROVIDER_NAME = "Renn Copilot";
-const PROVIDER_VENDOR = GENERATED_PROVIDER_VENDOR;
+const PROVIDER_VENDOR = "customendpoint";
 const API_TYPE = "chat-completions"; // CLIProxyAPI exposes an OpenAI-compatible /v1/chat/completions surface
 
 /**
@@ -50,24 +51,6 @@ interface ChatLanguageModelProvider {
   apiType?: string;
   models?: RemoteModelEntry[];
   [key: string]: unknown;
-}
-
-// Shape of one entry in the legacy github.copilot.chat.customOAIModels
-// settings.json object (keyed by model id). This mechanism is deprecated in
-// favor of the Custom Endpoint provider above, but VS Code stable still reads
-// it -- confirmed working end-to-end (including real Bearer auth) by the
-// "Antigravity for Copilot" extension, which is why it's offered here as the
-// PROVIDER_VENDOR === "customoai" build's registration path for platforms
-// where the newer Custom Endpoint provider isn't fully supported yet.
-interface LegacyOAIModelEntry {
-  name: string;
-  url: string;
-  model: string;
-  toolCalling?: boolean;
-  vision?: boolean;
-  maxInputTokens?: number;
-  maxOutputTokens?: number;
-  requiresAPIKey: boolean;
 }
 
 // Shape of the entries in GET /api/usage's `accounts` array -- one per
@@ -393,14 +376,11 @@ async function syncModels(showNotifications: boolean) {
     const remote = await fetchJson<{ models: RemoteModelEntry[]; apiKey?: string }>(
       `${backendUrl}/api/models/export`
     );
-    const { created, changed } =
-      PROVIDER_VENDOR === "customoai"
-        ? await writeLegacyCustomOAIModels(remote.models, remote.apiKey ?? "")
-        : writeProviderEntry(remote.models, remote.apiKey ?? "");
+    const { created, changed } = writeProviderEntry(remote.models, remote.apiKey ?? "");
 
     statusBarItem.text = `$(check) Renn Copilot (${remote.models.length})`;
     statusBarItem.tooltip = changed
-      ? `Synced ${remote.models.length} model(s) (${PROVIDER_VENDOR}). Click to re-sync.`
+      ? `Synced ${remote.models.length} model(s) into chatLanguageModels.json. Click to re-sync.`
       : `Already up to date (${remote.models.length} model(s)). Click to re-sync.`;
 
     // A sync round-trip means the backend is reachable -- piggyback a health
@@ -427,13 +407,11 @@ async function syncModels(showNotifications: boolean) {
       const keyNote = remote.apiKey
         ? `The API key was copied to your clipboard -- paste it in with Ctrl+V (Cmd+V on Mac) and press Enter.`
         : `Backend didn't return an API key yet -- run "Renn Copilot: Copy API Key to Clipboard" once it has.`;
-      const providerLabel =
-        PROVIDER_VENDOR === "customoai" ? "customOAIModels (legacy)" : "Custom Endpoint";
       const message = created
-        ? `Added "${PROVIDER_NAME}" as a new ${providerLabel} provider with ${remote.models.length} model(s). ` +
+        ? `Added "${PROVIDER_NAME}" as a new Custom Endpoint provider with ${remote.models.length} model(s). ` +
           `Reload VS Code, then open "Chat: Manage Language Models" and enter the API key for "${PROVIDER_NAME}" ` +
           `once (VS Code stores it separately from this file). ${keyNote}`
-        : `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" ${providerLabel} provider. ` +
+        : `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" Custom Endpoint provider. ` +
           `Reload VS Code, then check the model picker -- you may need to re-enter the API key. ${keyNote}`;
       const choice = await vscode.window.showInformationMessage(message, reload);
       if (choice === reload) {
@@ -548,55 +526,6 @@ function writeProviderEntry(models: RemoteModelEntry[], apiKey: string): { creat
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(providers, null, 2), "utf8");
-  return { created, changed: true };
-}
-
-/**
- * Registers models via the deprecated github.copilot.chat.customOAIModels
- * setting instead of chatLanguageModels.json -- the PROVIDER_VENDOR ===
- * "customoai" build's registration path, for platforms (e.g. VS Code on Mac,
- * per user report) where the newer Custom Endpoint provider doesn't fully
- * work yet. Unlike writeProviderEntry, this setting is a flat object keyed by
- * model id shared with any other extension using the same mechanism, so we
- * only touch entries whose `url` matches our own backend -- everything else
- * in the object (other extensions' entries) is left untouched.
- */
-async function writeLegacyCustomOAIModels(
-  models: RemoteModelEntry[],
-  apiKey: string
-): Promise<{ created: boolean; changed: boolean }> {
-  const copilotConfig = vscode.workspace.getConfiguration("github.copilot");
-  const existing = copilotConfig.get<Record<string, LegacyOAIModelEntry>>("chat.customOAIModels", {});
-  const ownUrl = models[0]?.url;
-
-  const ours: Record<string, LegacyOAIModelEntry> = {};
-  for (const [id, value] of Object.entries(existing)) {
-    if (ownUrl && value?.url === ownUrl) ours[id] = value;
-  }
-
-  const nextOurs: Record<string, LegacyOAIModelEntry> = {};
-  for (const m of models) {
-    nextOurs[m.id] = {
-      name: m.name,
-      url: m.url,
-      model: m.id,
-      toolCalling: m.toolCalling,
-      vision: m.vision,
-      maxInputTokens: m.maxInputTokens,
-      maxOutputTokens: m.maxOutputTokens,
-      requiresAPIKey: true,
-    };
-  }
-
-  const created = Object.keys(ours).length === 0 && Object.keys(nextOurs).length > 0;
-  const unchanged = JSON.stringify(ours) === JSON.stringify(nextOurs);
-  if (unchanged) return { created: false, changed: false };
-
-  const merged: Record<string, LegacyOAIModelEntry> = { ...existing };
-  for (const id of Object.keys(ours)) delete merged[id]; // drop our stale/renamed ids
-  Object.assign(merged, nextOurs);
-
-  await copilotConfig.update("chat.customOAIModels", merged, vscode.ConfigurationTarget.Global);
   return { created, changed: true };
 }
 
