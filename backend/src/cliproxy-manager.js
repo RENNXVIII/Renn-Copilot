@@ -44,12 +44,18 @@ export function getStatus() {
   };
 }
 
-/** Maps Node's os.platform()/arch() to the naming scheme used by CLIProxyAPI's GitHub releases. */
+/**
+ * Maps Node's os.platform()/arch() to the naming scheme used by CLIProxyAPI's
+ * GitHub releases (e.g. CLIProxyAPI_7.2.51_darwin_aarch64.tar.gz). Note the
+ * release assets use "aarch64", not Node's own "arm64" arch string -- getting
+ * this wrong silently breaks installs on every ARM64 machine (Apple Silicon
+ * Macs, ARM64 Windows/Linux) with "No release asset found for darwin/arm64".
+ */
 function platformKeywords() {
   const platform = os.platform(); // 'win32' | 'linux' | 'darwin'
   const arch = os.arch(); // 'x64' | 'arm64' | ...
   const osKey = platform === "win32" ? "windows" : platform === "darwin" ? "darwin" : "linux";
-  const archKey = arch === "x64" ? "amd64" : arch === "arm64" ? "arm64" : arch;
+  const archKey = arch === "x64" ? "amd64" : arch === "arm64" ? "aarch64" : arch;
   return { osKey, archKey, platform };
 }
 
@@ -61,10 +67,13 @@ async function fetchLatestReleaseAsset() {
   const release = await res.json();
   const { osKey, archKey } = platformKeywords();
 
-  const candidate = release.assets.find((asset) => {
+  // linux/freebsd releases ship both a full build and a "_no-plugin" variant
+  // for the same os/arch -- prefer the full one when both match.
+  const matches = release.assets.filter((asset) => {
     const name = asset.name.toLowerCase();
     return name.includes(osKey) && name.includes(archKey);
   });
+  const candidate = matches.find((asset) => !asset.name.toLowerCase().includes("no-plugin")) ?? matches[0];
 
   if (!candidate) {
     throw new Error(
