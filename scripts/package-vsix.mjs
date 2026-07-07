@@ -50,7 +50,7 @@ async function writeProviderVendor(value) {
       `// -- see extension.ts's PROVIDER_VENDOR. This checked-in default matches\n` +
       `// every release shipped so far, so a plain \`npm run package\` (no vendor\n` +
       `// arg) keeps producing the known-good build.\n` +
-      `export const GENERATED_PROVIDER_VENDOR = ${JSON.stringify(value)};\n`,
+      `export const GENERATED_PROVIDER_VENDOR: "customendpoint" | "customoai" = ${JSON.stringify(value)};\n`,
     "utf8"
   );
 }
