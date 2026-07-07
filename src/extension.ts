@@ -10,24 +10,24 @@ import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
 
 // As of VS Code's June 2026 BYOK overhaul, github.copilot.chat.customOAIModels
 // (a settings.json key) is gone -- VS Code now refuses to even write it via
-// the configuration API ("not a registered configuration"). The current,
-// recommended mechanism is the "customendpoint" vendor in chatLanguageModels.json.
-// There's also an older "customoai" vendor still accepted in that same file
-// (distinct from the dead settings.json key above) -- some VS Code builds
-// don't render customendpoint's provider grouping / API-key prompt correctly
-// (seen on a user's Mac install), so "customoai" is offered as a fallback via
-// rennCopilot.providerVendor. Its models never carry an Authorization header
-// at request time, so using it also flips the backend to run without proxy
-// auth (see setProxyAuthEnabled call in syncModels).
+// the configuration API ("not a registered configuration"). The current
+// mechanism is the "customendpoint" vendor, configured via a separate JSON
+// file (User/chatLanguageModels.json in the VS Code profile dir).
 // See https://code.visualstudio.com/docs/agent-customization/language-models
+//
+// Some VS Code builds don't render this provider's grouping / API-key prompt
+// in "Chat: Manage Language Models" correctly (seen on a user's Mac install:
+// models show up ungrouped, with no way to enter a key), so every chat
+// request 401s forever since no Authorization header ever gets attached.
+// rennCopilot.requireApiKey lets that case be worked around: when turned
+// off, the backend is flipped (via setProxyAuthEnabled) to stop requiring
+// its proxy API key at all, so it doesn't matter that VS Code never sends one.
 const PROVIDER_NAME = "Renn Copilot";
+const PROVIDER_VENDOR = "customendpoint";
 const API_TYPE = "chat-completions"; // CLIProxyAPI exposes an OpenAI-compatible /v1/chat/completions surface
 
-type ProviderVendor = "customendpoint" | "customoai";
-
-function getProviderVendor(): ProviderVendor {
-  const value = vscode.workspace.getConfiguration("rennCopilot").get<string>("providerVendor", "customendpoint");
-  return value === "customoai" ? "customoai" : "customendpoint";
+function getRequireApiKey(): boolean {
+  return vscode.workspace.getConfiguration("rennCopilot").get<boolean>("requireApiKey", true);
 }
 
 /**
@@ -381,7 +381,7 @@ async function copyApiKey() {
 async function syncModels(showNotifications: boolean) {
   const config = vscode.workspace.getConfiguration("rennCopilot");
   const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
-  const vendor = getProviderVendor();
+  const requireApiKey = getRequireApiKey();
 
   statusBarItem.text = "$(sync~spin) Renn Copilot";
   try {
@@ -389,16 +389,17 @@ async function syncModels(showNotifications: boolean) {
       `${backendUrl}/api/models/export`
     );
 
-    // customoai never sends an Authorization header, so the backend has to
-    // be told to stop requiring one -- and switching back to customendpoint
-    // has to restore it, or chat requests would silently go unauthenticated.
-    await putJson(`${backendUrl}/api/server/proxy-auth`, { enabled: vendor !== "customoai" }).catch(() => {
+    // When the user has turned off requireApiKey (their VS Code build isn't
+    // prompting for one at all -- see the doc comment above), tell the
+    // backend to stop requiring its proxy API key too, so it doesn't matter
+    // that no Authorization header is ever attached to chat requests.
+    await putJson(`${backendUrl}/api/server/proxy-auth`, { enabled: requireApiKey }).catch(() => {
       // Non-fatal -- the backend might not be reachable for this call even
       // though /api/models/export just succeeded (rare race); the model
       // sync below still proceeds either way.
     });
 
-    const { created, changed } = writeProviderEntry(vendor, remote.models, remote.apiKey ?? "");
+    const { created, changed } = writeProviderEntry(remote.models, requireApiKey ? remote.apiKey ?? "" : "");
 
     statusBarItem.text = `$(check) Renn Copilot (${remote.models.length})`;
     statusBarItem.tooltip = changed
@@ -415,8 +416,7 @@ async function syncModels(showNotifications: boolean) {
     // sync means the file (and therefore any previously-entered key) is
     // untouched, so overwriting the user's clipboard on every silent
     // startup sync would just be an annoying side effect for no reason.
-    // customoai never needs a pasted key at all.
-    if (vendor === "customendpoint" && changed && remote.apiKey) {
+    if (requireApiKey && changed && remote.apiKey) {
       await vscode.env.clipboard.writeText(remote.apiKey);
     }
 
@@ -427,23 +427,21 @@ async function syncModels(showNotifications: boolean) {
         return;
       }
       const reload = "Reload Window";
-      const keyNote =
-        vendor === "customoai"
-          ? `No API key needed for this vendor -- the backend now runs without proxy authentication.`
-          : remote.apiKey
-            ? `The API key was copied to your clipboard -- paste it in with Ctrl+V (Cmd+V on Mac) and press Enter.`
-            : `Backend didn't return an API key yet -- run "Renn Copilot: Copy API Key to Clipboard" once it has.`;
-      const providerLabel = vendor === "customoai" ? "customoai" : "Custom Endpoint";
+      const keyNote = !requireApiKey
+        ? `No API key needed -- rennCopilot.requireApiKey is off, so the backend now runs without proxy authentication.`
+        : remote.apiKey
+          ? `The API key was copied to your clipboard -- paste it in with Ctrl+V (Cmd+V on Mac) and press Enter.`
+          : `Backend didn't return an API key yet -- run "Renn Copilot: Copy API Key to Clipboard" once it has.`;
       const message = created
-        ? `Added "${PROVIDER_NAME}" as a new ${providerLabel} provider with ${remote.models.length} model(s). ` +
+        ? `Added "${PROVIDER_NAME}" as a new Custom Endpoint provider with ${remote.models.length} model(s). ` +
           `Reload VS Code, then check the model picker. ${keyNote}`
-        : `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" ${providerLabel} provider. ` +
+        : `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" Custom Endpoint provider. ` +
           `Reload VS Code, then check the model picker. ${keyNote}`;
       const choice = await vscode.window.showInformationMessage(message, reload);
       if (choice === reload) {
         void vscode.commands.executeCommand("workbench.action.reloadWindow");
       }
-    } else if (vendor === "customendpoint" && changed && remote.apiKey) {
+    } else if (requireApiKey && changed && remote.apiKey) {
       // Silent startup sync that still changed the file (e.g. the very
       // first sync after installing) -- a toast is warranted here since
       // there's no other visible feedback, but keep it short.
@@ -514,11 +512,7 @@ function chatLanguageModelsPath(): string {
  * reload. So: skip the write entirely if the computed entry is identical
  * to what's already on disk.
  */
-function writeProviderEntry(
-  vendor: ProviderVendor,
-  models: RemoteModelEntry[],
-  apiKey: string
-): { created: boolean; changed: boolean } {
+function writeProviderEntry(models: RemoteModelEntry[], apiKey: string): { created: boolean; changed: boolean } {
   const filePath = chatLanguageModelsPath();
   let providers: ChatLanguageModelProvider[] = [];
   try {
@@ -530,30 +524,17 @@ function writeProviderEntry(
     providers = [];
   }
 
-  // Drop any entry left over from the *other* vendor -- switching
-  // rennCopilot.providerVendor should replace our entry, not leave a stale
-  // duplicate with the old vendor string sitting alongside the new one.
-  providers = providers.filter((p) => !(p.name === PROVIDER_NAME && p.vendor !== vendor));
+  const existingIndex = providers.findIndex(
+    (p) => p.vendor === PROVIDER_VENDOR && p.name === PROVIDER_NAME
+  );
+  const entry: ChatLanguageModelProvider = {
+    name: PROVIDER_NAME,
+    vendor: PROVIDER_VENDOR,
+    apiKey,
+    apiType: API_TYPE,
+    models,
+  };
 
-  const entry: ChatLanguageModelProvider =
-    vendor === "customoai"
-      ? {
-          name: PROVIDER_NAME,
-          vendor,
-          // customoai's models never carry an Authorization header, so the
-          // url has to be the base endpoint (CLIProxyAPI appends the path
-          // itself), and there's no apiKey/apiType field for this vendor.
-          models: models.map((m) => ({ ...m, url: m.url.replace(/\/chat\/completions$/, "") })),
-        }
-      : {
-          name: PROVIDER_NAME,
-          vendor,
-          apiKey,
-          apiType: API_TYPE,
-          models,
-        };
-
-  const existingIndex = providers.findIndex((p) => p.vendor === vendor && p.name === PROVIDER_NAME);
   const created = existingIndex === -1;
   const existingEntry = created ? null : providers[existingIndex];
   const unchanged = !created && JSON.stringify(existingEntry) === JSON.stringify(entry);
