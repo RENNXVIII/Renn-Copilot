@@ -6,6 +6,7 @@ import {
   startServer,
   stopServer,
   restartServer,
+  setProxyAuthEnabled,
 } from "./cliproxy-manager.js";
 import { management, patchRoutingStrategy, readRoutingStrategy } from "./management-client.js";
 import { listLiveModelIds, probeVisionSupport } from "./proxy-client.js";
@@ -52,6 +53,18 @@ router.post("/server/stop", asyncHandler(async (req, res) => res.json(await stop
 router.post("/server/restart", asyncHandler(async (req, res) => res.json(await restartServer())));
 
 router.get("/server/logs", (req, res) => res.json({ lines: getRecentLogs() }));
+
+// Lets the extension flip whether CLIProxyAPI requires the proxy API key at
+// all -- needed for VS Code's "customoai" BYOK vendor, which never sends an
+// Authorization header (see setProxyAuthEnabled's doc comment).
+router.put(
+  "/server/proxy-auth",
+  express.json(),
+  asyncHandler(async (req, res) => {
+    const enabled = req.body?.enabled !== false;
+    res.json({ ok: true, enabled, ...setProxyAuthEnabled(enabled) });
+  })
+);
 
 // --- Config (proxied to CLIProxyAPI's Management API) ---------------------
 router.get("/config", asyncHandler(async (req, res) => res.json(await management.getConfig())));

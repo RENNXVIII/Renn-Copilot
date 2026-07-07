@@ -309,6 +309,41 @@ export function ensureProxyApiKey() {
   return proxyApiKey;
 }
 
+/**
+ * Toggles whether CLIProxyAPI's OpenAI-compatible surface requires the
+ * Bearer proxy API key at all. Needed for VS Code's "customoai" BYOK vendor
+ * (chatLanguageModels.json), which -- unlike the "customendpoint" vendor --
+ * never sends an Authorization header for requests it makes, so the proxy
+ * has to be configured to not require one (confirmed empirically: an empty
+ * api-keys array makes CLIProxyAPI accept every request unauthenticated).
+ * CLIProxyAPI watches config.yaml and hot-reloads it, so no restart needed.
+ */
+export function setProxyAuthEnabled(enabled) {
+  if (!fs.existsSync(configPath())) return { changed: false };
+  let doc;
+  try {
+    doc = yaml.load(fs.readFileSync(configPath(), "utf8")) || {};
+  } catch (err) {
+    pushLog(`Warning: could not parse config.yaml (${err.message})`);
+    return { changed: false };
+  }
+
+  const ownKeys = loadOwnKeys();
+  const proxyApiKey = ownKeys.proxyApiKey || settings.proxyApiKey;
+  const nextKeys = enabled && proxyApiKey ? [proxyApiKey] : [];
+  const currentKeys = Array.isArray(doc["api-keys"]) ? doc["api-keys"] : [];
+  if (JSON.stringify(currentKeys) === JSON.stringify(nextKeys)) return { changed: false };
+
+  doc["api-keys"] = nextKeys;
+  fs.writeFileSync(configPath(), yaml.dump(doc), "utf8");
+  pushLog(
+    enabled
+      ? "Re-enabled proxy API key authentication."
+      : "Disabled proxy API key authentication (customoai BYOK vendor doesn't send one)."
+  );
+  return { changed: true };
+}
+
 export async function startServer() {
   if (isRunning()) return getStatus();
   if (!fs.existsSync(binaryPath())) {

@@ -92,6 +92,16 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically start the CLIProxyAPI server once the backend is up (same as clicking \"Start\" on the Overview page). Only takes effect once the binary has been installed at least once; has no effect if rennCopilot.autoStartBackend is disabled."
+        },
+        "rennCopilot.providerVendor": {
+          "type": "string",
+          "enum": ["customendpoint", "customoai"],
+          "enumDescriptions": [
+            "The current VS Code BYOK provider. Requires pasting the API key once into \"Chat: Manage Language Models\".",
+            "Older BYOK vendor, useful when \"Custom Endpoint\" doesn't render the provider/API-key prompt correctly (seen on some VS Code builds). No API key entry needed -- the backend is switched to run without proxy authentication instead."
+          ],
+          "default": "customendpoint",
+          "description": "Which VS Code BYOK mechanism to register models under. Change this if models don't show up or chat requests fail with 401 using the default."
         }
       }
     }
