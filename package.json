@@ -105,6 +105,8 @@
     "webview:dev": "npm run dev --prefix webview-ui",
     "webview:install": "npm install --prefix webview-ui",
     "webview:build": "npm run build --prefix webview-ui",
+    "package:customendpoint": "node scripts/package-vsix.mjs customendpoint",
+    "package:customoai": "node scripts/package-vsix.mjs customoai",
     "package": "npm run backend:install && npm run webview:install && npm run webview:build && vsce package --allow-missing-repository"
   },
   "devDependencies": {

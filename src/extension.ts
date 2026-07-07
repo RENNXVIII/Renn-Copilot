@@ -7,6 +7,7 @@ import * as os from "node:os";
 import * as backendManager from "./backend-manager";
 import { openDashboardPanel } from "./webview-panel";
 import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
+import { GENERATED_PROVIDER_VENDOR } from "./generated-provider";
 
 // As of VS Code's June 2026 BYOK overhaul, github.copilot.chat.customOAIModels
 // is deprecated and no longer read by the model picker. The current mechanism
@@ -14,7 +15,7 @@ import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
 // (User/chatLanguageModels.json in the VS Code profile dir) rather than
 // settings.json. See https://code.visualstudio.com/docs/agent-customization/language-models
 const PROVIDER_NAME = "Renn Copilot";
-const PROVIDER_VENDOR = "customendpoint";
+const PROVIDER_VENDOR = GENERATED_PROVIDER_VENDOR;
 const API_TYPE = "chat-completions"; // CLIProxyAPI exposes an OpenAI-compatible /v1/chat/completions surface
 
 /**

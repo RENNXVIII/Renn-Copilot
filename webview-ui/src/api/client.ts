@@ -257,7 +257,6 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ strategy }),
     }),
-
   getPreferences: () => request<{ revealEmails: boolean }>("/preferences"),
   setPreferences: (revealEmails: boolean) =>
     request<{ revealEmails: boolean }>("/preferences", {
