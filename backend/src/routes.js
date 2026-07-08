@@ -14,6 +14,8 @@ import { buildModelList, toCopilotModelEntry } from "./model-catalog.js";
 import { readState, writeState } from "./state.js";
 import { settings, proxyBaseUrl } from "./settings.js";
 import { getUsageSummary } from "./usage-store.js";
+import { getCodexUsage } from "./codex-usage.js";
+import { getAntigravityUsage } from "./antigravity-usage.js";
 
 export const router = express.Router();
 
@@ -248,6 +250,47 @@ router.get("/usage/tokens", (req, res) => {
   const days = Number(req.query.days) || 7;
   res.json(getUsageSummary({ days }));
 });
+
+// Real-time ChatGPT rate-limit % per codex account (5h/7d windows), polled
+// by the Usage page -- see codex-usage.js's doc comment for why this reads
+// auth files directly instead of going through CLIProxyAPI's Management API.
+router.get(
+  "/usage/codex-limits",
+  asyncHandler(async (req, res) => {
+    const authFilesRaw = await management.listAuthFiles();
+    const files = Array.isArray(authFilesRaw?.files) ? authFilesRaw.files : normalizeList(authFilesRaw);
+    const codexFiles = files.filter((f) => f.provider === "codex" && f.name && f.path);
+
+    const accounts = await Promise.all(
+      codexFiles.map(async (f) => ({
+        name: f.name,
+        label: f.label || f.email || f.name,
+        ...(await getCodexUsage(f.name, f.path)),
+      }))
+    );
+    res.json({ accounts });
+  })
+);
+
+// Real-time Gemini quota % per Antigravity account -- see antigravity-usage.js
+// for why this only covers Gemini models (no Claude/GPT bucket exists here).
+router.get(
+  "/usage/antigravity-limits",
+  asyncHandler(async (req, res) => {
+    const authFilesRaw = await management.listAuthFiles();
+    const files = Array.isArray(authFilesRaw?.files) ? authFilesRaw.files : normalizeList(authFilesRaw);
+    const antigravityFiles = files.filter((f) => f.provider === "antigravity" && f.name && f.path);
+
+    const accounts = await Promise.all(
+      antigravityFiles.map(async (f) => ({
+        name: f.name,
+        label: f.label || f.email || f.name,
+        ...(await getAntigravityUsage(f.name, f.path)),
+      }))
+    );
+    res.json({ accounts });
+  })
+);
 
 // --- OAuth login flows ------------------------------------------------------
 // Supported directly by CLIProxyAPI's Management API today.

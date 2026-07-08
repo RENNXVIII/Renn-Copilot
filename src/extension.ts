@@ -530,7 +530,10 @@ function writeProviderEntry(models: RemoteModelEntry[], apiKey: string): { creat
   const entry: ChatLanguageModelProvider = {
     name: PROVIDER_NAME,
     vendor: PROVIDER_VENDOR,
-    apiKey,
+    // Omit the field entirely rather than writing an empty string -- an
+    // empty "apiKey": "" line is misleading when rennCopilot.requireApiKey
+    // is off (the backend isn't expecting one at all in that mode).
+    ...(apiKey ? { apiKey } : {}),
     apiType: API_TYPE,
     models,
   };

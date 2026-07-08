@@ -106,6 +106,38 @@ export interface UsageResponse {
   totals: { success: number; failed: number };
 }
 
+export interface CodexRateWindow {
+  usedPercent: number | null;
+  windowSeconds: number | null;
+  resetAfterSeconds: number | null;
+}
+
+export interface CodexUsageEntry {
+  name: string;
+  label: string;
+  ok: boolean;
+  reason?: string;
+  planType?: string | null;
+  primary?: CodexRateWindow | null;
+  secondary?: CodexRateWindow | null;
+}
+
+export interface AntigravityQuotaBucket {
+  modelId: string | null;
+  usedPercent: number | null;
+  resetAfterSeconds: number | null;
+}
+
+export interface AntigravityUsageEntry {
+  name: string;
+  label: string;
+  ok: boolean;
+  reason?: string;
+  verifyUrl?: string;
+  worst?: AntigravityQuotaBucket | null;
+  buckets?: AntigravityQuotaBucket[];
+}
+
 export interface UsageTokenTotals {
   requests: number;
   failed: number;
@@ -206,6 +238,8 @@ export const api = {
   getAuthFiles: () => request<{ files: AuthFileEntry[] }>("/auth-files"),
   getUsage: () => request<UsageResponse>("/usage"),
   getUsageTokens: (days = 7) => request<UsageTokenSummary>(`/usage/tokens?days=${days}`),
+  getCodexLimits: () => request<{ accounts: CodexUsageEntry[] }>("/usage/codex-limits"),
+  getAntigravityLimits: () => request<{ accounts: AntigravityUsageEntry[] }>("/usage/antigravity-limits"),
   deleteAuthFile: (name: string) =>
     request<{ status: string }>(`/auth-files/${encodeURIComponent(name)}`, { method: "DELETE" }),
   setAuthFileDisabled: (name: string, disabled: boolean) =>
