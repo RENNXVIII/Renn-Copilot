@@ -138,6 +138,17 @@ export const management = {
   setAuthFileDisabled: (name, disabled) =>
     call("/auth-files/status", { method: "PATCH", body: { name, disabled } }),
 
+  // Namespaces this credential's models as "<prefix>/<model-id>" -- a
+  // distinct routable id that only this credential can serve, instead of
+  // pooling into round-robin with every other credential (of any provider)
+  // that happens to serve the same bare model id (e.g. two different
+  // OAuth logins both offering "claude-sonnet-4-6"). Undocumented on
+  // help.router-for.me but present and covered by CLIProxyAPI's own test
+  // suite (auth_files_patch_fields_test.go) -- confirmed working end-to-end
+  // against a live account before wiring this in. Pass "" to clear a prefix.
+  setAuthFilePrefix: (name, prefix) =>
+    call("/auth-files/fields", { method: "PATCH", body: { name, prefix } }),
+
   // Per-(provider, base_url|api_key) request buckets for non-OAuth providers
   // (openai-compatibility, plus extra gemini/claude/codex API keys). Mirrors
   // the success/failed/recent_requests shape already returned inline by

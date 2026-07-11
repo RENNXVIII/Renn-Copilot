@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import express from "express";
 import {
   getStatus,
@@ -13,9 +14,9 @@ import { listLiveModelIds, probeVisionSupport } from "./proxy-client.js";
 import { buildModelList, toCopilotModelEntry } from "./model-catalog.js";
 import { readState, writeState } from "./state.js";
 import { settings, proxyBaseUrl } from "./settings.js";
-import { getUsageSummary } from "./usage-store.js";
+import { getUsageSummary, getUsageByCredential, getUsageByCredentialWindows } from "./usage-store.js";
 import { getCodexUsage } from "./codex-usage.js";
-import { getAntigravityUsage } from "./antigravity-usage.js";
+import { proxyChatCompletions } from "./chat-proxy.js";
 
 export const router = express.Router();
 
@@ -67,6 +68,12 @@ router.put(
     res.json({ ok: true, enabled, ...setProxyAuthEnabled(enabled) });
   })
 );
+
+// Sanitizing hop in front of CLIProxyAPI's own /v1/chat/completions, used
+// only for Claude-family models (see chat-proxy.js and toCopilotModelEntry
+// in model-catalog.js for why -- Anthropic rejects top_p/temperature/top_k
+// on Claude Opus 4.7+/Sonnet 4.5+, which VS Code still sends by default).
+router.post("/proxy/v1/chat/completions", express.json({ limit: "25mb" }), asyncHandler(proxyChatCompletions));
 
 // --- Config (proxied to CLIProxyAPI's Management API) ---------------------
 router.get("/config", asyncHandler(async (req, res) => res.json(await management.getConfig())));
@@ -123,7 +130,30 @@ router.get(
 );
 
 // --- Auth files (OAuth credential management) ------------------------------
-router.get("/auth-files", asyncHandler(async (req, res) => res.json(await management.listAuthFiles())));
+
+// GET /auth-files' response doesn't include each credential's `prefix`
+// (confirmed empirically -- the field is stored and applied for routing, but
+// not surfaced in this listing), so we read it directly off the auth file on
+// disk (same pattern as codex-usage.js/antigravity-usage.js) and merge it in.
+function readPrefixFromDisk(filePath) {
+  if (!filePath) return "";
+  try {
+    const doc = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    return typeof doc.prefix === "string" ? doc.prefix : "";
+  } catch {
+    return "";
+  }
+}
+
+router.get(
+  "/auth-files",
+  asyncHandler(async (req, res) => {
+    const raw = await management.listAuthFiles();
+    const files = Array.isArray(raw?.files) ? raw.files : normalizeList(raw);
+    const withPrefix = files.map((f) => ({ ...f, prefix: readPrefixFromDisk(f.path) }));
+    res.json(Array.isArray(raw?.files) ? { ...raw, files: withPrefix } : withPrefix);
+  })
+);
 
 router.delete(
   "/auth-files/:name",
@@ -142,6 +172,27 @@ router.patch(
       return res.status(400).json({ error: "Body must include { name: string, disabled: boolean }" });
     }
     res.json(await management.setAuthFileDisabled(name, disabled));
+  })
+);
+
+// Namespaces a credential's models as "<prefix>/<model-id>" -- see
+// management-client.js's setAuthFilePrefix doc comment for why this exists:
+// it's the only way to address one specific credential when two providers
+// (or two credentials of the same provider) serve the identical bare model
+// id, since CLIProxyAPI otherwise pools every credential serving that id
+// into one round-robin/fill-first group. Pass prefix: "" to clear it.
+router.patch(
+  "/auth-files/prefix",
+  express.json(),
+  asyncHandler(async (req, res) => {
+    const { name, prefix } = req.body || {};
+    if (!name || typeof prefix !== "string") {
+      return res.status(400).json({ error: "Body must include { name: string, prefix: string }" });
+    }
+    if (!/^[a-zA-Z0-9_-]*$/.test(prefix)) {
+      return res.status(400).json({ error: "Prefix may only contain letters, numbers, hyphens, and underscores" });
+    }
+    res.json(await management.setAuthFilePrefix(name, prefix));
   })
 );
 
@@ -251,44 +302,52 @@ router.get("/usage/tokens", (req, res) => {
   res.json(getUsageSummary({ days }));
 });
 
-// Real-time ChatGPT rate-limit % per codex account (5h/7d windows), polled
-// by the Usage page -- see codex-usage.js's doc comment for why this reads
-// auth files directly instead of going through CLIProxyAPI's Management API.
+const ZERO_CRED_STATS = { requests: 0, failed: 0, input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 };
+
+// Per-credential usage table (request/token/cache-rate totals joined with
+// live rate-limit quota) for the Usage page's "Auth Files" view -- inspired
+// by cpa-usage-keeper's dashboard, adapted to reuse the usage-queue data
+// this backend already has instead of requiring Redis (see usage-store.js's
+// getUsageByCredential/getUsageByCredentialWindows). Only Codex gets a live
+// quota (see codex-usage.js) -- Antigravity's equivalent was removed: its
+// only real quota data is Gemini-only (no 5h/weekly split to match this
+// shape), and there's no legitimate remote API for its Claude/GPT usage
+// (the only way to get that requires spoofing a client identity to Google,
+// which risks the account being flagged -- not worth it for this feature).
 router.get(
-  "/usage/codex-limits",
+  "/usage/credentials",
   asyncHandler(async (req, res) => {
     const authFilesRaw = await management.listAuthFiles();
     const files = Array.isArray(authFilesRaw?.files) ? authFilesRaw.files : normalizeList(authFilesRaw);
-    const codexFiles = files.filter((f) => f.provider === "codex" && f.name && f.path);
+    const totalsByAuth = getUsageByCredential({ days: 14 });
+    const windowsByAuth = getUsageByCredentialWindows();
 
-    const accounts = await Promise.all(
-      codexFiles.map(async (f) => ({
-        name: f.name,
-        label: f.label || f.email || f.name,
-        ...(await getCodexUsage(f.name, f.path)),
-      }))
+    const credentials = await Promise.all(
+      files.map(async (f) => {
+        const authIndex = f.auth_index !== undefined && f.auth_index !== null ? String(f.auth_index) : null;
+        const totals = (authIndex && totalsByAuth[authIndex]) || ZERO_CRED_STATS;
+        const windows = (authIndex && windowsByAuth[authIndex]) || { window5h: ZERO_CRED_STATS, window7d: ZERO_CRED_STATS };
+        const cacheRate = totals.input_tokens > 0 ? Math.round((totals.cached_tokens / totals.input_tokens) * 100) : 0;
+
+        const quota = f.provider === "codex" && f.name && f.path ? await getCodexUsage(f.name, f.path) : null;
+
+        return {
+          name: f.name,
+          label: f.label || f.email || f.name,
+          provider: f.provider,
+          disabled: !!f.disabled,
+          unavailable: !!f.unavailable,
+          requests: totals.requests,
+          failedRequests: totals.failed,
+          totalTokens: totals.total_tokens,
+          cacheRate,
+          window5hTokens: windows.window5h.total_tokens,
+          window7dTokens: windows.window7d.total_tokens,
+          quota,
+        };
+      })
     );
-    res.json({ accounts });
-  })
-);
-
-// Real-time Gemini quota % per Antigravity account -- see antigravity-usage.js
-// for why this only covers Gemini models (no Claude/GPT bucket exists here).
-router.get(
-  "/usage/antigravity-limits",
-  asyncHandler(async (req, res) => {
-    const authFilesRaw = await management.listAuthFiles();
-    const files = Array.isArray(authFilesRaw?.files) ? authFilesRaw.files : normalizeList(authFilesRaw);
-    const antigravityFiles = files.filter((f) => f.provider === "antigravity" && f.name && f.path);
-
-    const accounts = await Promise.all(
-      antigravityFiles.map(async (f) => ({
-        name: f.name,
-        label: f.label || f.email || f.name,
-        ...(await getAntigravityUsage(f.name, f.path)),
-      }))
-    );
-    res.json({ accounts });
+    res.json({ credentials });
   })
 );
 
@@ -338,6 +397,27 @@ async function getLoggedInProviders() {
   } catch {
     // If auth-files can't be read, fall back to name-based guessing in buildModelList.
     return [];
+  }
+}
+
+// Maps each credential's `prefix` (see /auth-files/prefix, management-client.js's
+// setAuthFilePrefix doc comment) to its real provider, so buildModelList can
+// resolve a prefixed live id like "claude/claude-sonnet-4-6" to the exact
+// credential that owns it -- CLIProxyAPI's Management API doesn't surface
+// `prefix` in GET /auth-files, so this reads each auth file directly (same
+// pattern as the /auth-files route's readPrefixFromDisk).
+async function getPrefixIndex() {
+  try {
+    const authFilesRaw = await management.listAuthFiles();
+    const files = Array.isArray(authFilesRaw?.files) ? authFilesRaw.files : normalizeList(authFilesRaw);
+    const index = {};
+    for (const f of files) {
+      const prefix = readPrefixFromDisk(f.path);
+      if (prefix) index[prefix] = f.provider;
+    }
+    return index;
+  } catch {
+    return {};
   }
 }
 
@@ -402,14 +482,15 @@ function ensureVisionProbed(modelId) {
 }
 
 async function getMergedCatalog() {
-  const [loggedInProviders, openAiCompatEntries] = await Promise.all([
+  const [loggedInProviders, openAiCompatEntries, prefixIndex] = await Promise.all([
     getLoggedInProviders(),
     getOpenAiCompatEntries(),
+    getPrefixIndex(),
   ]);
   try {
     const liveIds = await listLiveModelIds();
     const memory = readState().modelProviderMemory;
-    const { models, memory: nextMemory } = buildModelList(liveIds, loggedInProviders, openAiCompatEntries, memory);
+    const { models, memory: nextMemory } = buildModelList(liveIds, loggedInProviders, openAiCompatEntries, memory, prefixIndex);
     // Only hits disk when a new id was actually learned (i.e. exactly one
     // provider was logged in and we saw an id we hadn't seen before).
     if (JSON.stringify(nextMemory) !== JSON.stringify(memory)) {
@@ -419,18 +500,60 @@ async function getMergedCatalog() {
       catalog: models,
       source: liveIds.length ? "live" : "empty",
       liveError: null,
+      prefixIndex,
     };
   } catch (err) {
-    return { catalog: [], source: "empty", liveError: err.message };
+    return { catalog: [], source: "empty", liveError: err.message, prefixIndex };
   }
+}
+
+// Strips a live id's prefix segment (see /auth-files/prefix) back down to the
+// underlying model name, e.g. "claude/claude-sonnet-4-6" -> "claude-sonnet-4-6".
+// Only ever strips when the segment before "/" is a real, currently-set
+// credential prefix -- a customProvider or catalog id's own "/" (e.g. an
+// OpenRouter-style "meta-llama/llama-3.1-70b") is left untouched.
+function basePartOf(id, prefixIndex) {
+  const slash = id.indexOf("/");
+  if (slash > 0 && prefixIndex[id.slice(0, slash)]) return id.slice(slash + 1);
+  return id;
 }
 
 router.get(
   "/models",
   asyncHandler(async (req, res) => {
     const state = readState();
-    const { catalog, source, liveError } = await getMergedCatalog();
-    const capabilities = state.modelCapabilities || {};
+    const { catalog, source, liveError, prefixIndex } = await getMergedCatalog();
+    const capabilities = { ...(state.modelCapabilities || {}) };
+
+    // A prefixed id and its bare counterpart both live-list from CLIProxyAPI
+    // once force-model-prefix is on, but when they resolve to the same
+    // provider (i.e. genuinely the same credential) they're the identical
+    // underlying model -- probing vision support twice would fire two real,
+    // quota-costing chat-completion requests for one fact. Reuse whichever
+    // form was already probed instead of re-probing the other. (Ids that
+    // resolve to *different* providers -- e.g. the bare id now routing to
+    // Antigravity while the prefixed one is pinned to Claude Code -- are
+    // correctly kept separate, since they may be genuinely different accounts.)
+    const groups = new Map();
+    for (const m of catalog) {
+      const key = `${m.provider}::${basePartOf(m.id, prefixIndex)}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m.id);
+    }
+    let capabilitiesChanged = false;
+    for (const ids of groups.values()) {
+      if (ids.length < 2) continue;
+      const known = ids.find((id) => capabilities[id]);
+      if (!known) continue;
+      for (const id of ids) {
+        if (id !== known && !capabilities[id]) {
+          capabilities[id] = capabilities[known];
+          capabilitiesChanged = true;
+        }
+      }
+    }
+    if (capabilitiesChanged) writeState({ modelCapabilities: capabilities });
+
     const models = catalog.map((m) => {
       const capability = capabilities[m.id];
       if (!capability) ensureVisionProbed(m.id); // first time we've seen this id -- queue a one-time probe
@@ -481,7 +604,10 @@ router.get(
     const capabilities = state.modelCapabilities || {};
     const enabled = catalog.filter((m) => state.enabledModelIds.includes(m.id));
     const entries = enabled.map((m) =>
-      toCopilotModelEntry({ ...m, capabilities: capabilities[m.id] }, { proxyUrl: proxyBaseUrl() })
+      toCopilotModelEntry(
+        { ...m, capabilities: capabilities[m.id] },
+        { proxyUrl: proxyBaseUrl(), ownBaseUrl: `http://127.0.0.1:${settings.port}` }
+      )
     );
     // VS Code's current BYOK mechanism ("Custom Endpoint" provider, written to
     // chatLanguageModels.json) keys the API key at the *provider* level, not

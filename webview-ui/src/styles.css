@@ -430,7 +430,8 @@ a.link {
 }
 
 input.text-input,
-textarea.text-input {
+textarea.text-input,
+select.text-input {
   background: var(--vscode-input-background);
   color: var(--vscode-input-foreground);
   border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));

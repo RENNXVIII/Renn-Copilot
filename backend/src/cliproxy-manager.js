@@ -13,6 +13,49 @@ import { settings, ensureDirs, binaryPath, configPath, managementBaseUrl } from 
 
 const GITHUB_REPO = "router-for-me/CLIProxyAPI";
 
+// Surgically patches (or inserts) a single top-level scalar key in raw
+// config.yaml text, instead of yaml.load()-then-yaml.dump()-ing the whole
+// document -- a full re-dump silently strips every comment in the user's
+// real config.yaml (same reasoning as management-client.js's
+// patchRoutingStrategy, which this mirrors). Only ever touches the one
+// `key: ...` line; everything else is left byte-for-byte untouched. Assumes
+// `key` is always written as a single-line scalar (true/false/number),
+// which is the case for every key this is used on.
+function patchTopLevelScalar(yamlText, key, valueLiteral) {
+  const lines = yamlText.split("\n");
+  const re = new RegExp(`^${key}:\\s*.*$`);
+  const idx = lines.findIndex((l) => re.test(l));
+  if (idx === -1) {
+    const sep = yamlText.endsWith("\n") ? "" : "\n";
+    return `${yamlText}${sep}${key}: ${valueLiteral}\n`;
+  }
+  lines[idx] = `${key}: ${valueLiteral}`;
+  return lines.join("\n");
+}
+
+// Same surgical approach as patchTopLevelScalar, but for a top-level string
+// array (e.g. `api-keys`) that may currently be written either as an inline
+// flow list (`key: ["x"]` / `key: []`) or a block list (`key:` followed by
+// indented `- item` lines) -- replaces whichever form is present with a
+// fresh flow-style list, without touching anything else in the file.
+function patchTopLevelList(yamlText, key, items) {
+  const lines = yamlText.split("\n");
+  const startRe = new RegExp(`^${key}:\\s*(.*)$`);
+  const idx = lines.findIndex((l) => startRe.test(l));
+  const newLine = `${key}: ${JSON.stringify(items)}`;
+  if (idx === -1) {
+    const sep = yamlText.endsWith("\n") ? "" : "\n";
+    return `${yamlText}${sep}${newLine}\n`;
+  }
+  const inlineRemainder = lines[idx].match(startRe)[1].trim();
+  let end = idx + 1;
+  if (!inlineRemainder) {
+    while (end < lines.length && /^\s*-\s/.test(lines[end])) end++;
+  }
+  lines.splice(idx, end - idx, newLine);
+  return lines.join("\n");
+}
+
 let childProcess = null;
 let lastStartError = null;
 const recentLogLines = [];
@@ -59,12 +102,59 @@ function platformKeywords() {
   return { osKey, archKey, platform };
 }
 
+/**
+ * node-fetch has no default timeout -- a stalled connection (dropped packet,
+ * flaky network, an in-flight request the OS never completes) leaves a fetch
+ * pending forever. AbortController gives it a hard ceiling instead, but the
+ * signal has to stay live through the whole operation `fn` performs
+ * (including reading the response body via .json()/.arrayBuffer()) -- an
+ * earlier version of this cleared the timer as soon as fetch()'s promise
+ * resolved (i.e. once headers arrived), which left body-streaming stalls
+ * completely unprotected and still hung indefinitely.
+ */
+async function withTimeout(timeoutMs, fn) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fn(controller.signal);
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(`Timed out after ${timeoutMs}ms`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * fs.promises operations (copyFile, chmod, rm, and the extract-zip/tar
+ * libraries built on them) have no timeout and no AbortSignal support, so
+ * they can't use withTimeout above. Confirmed in practice: on Windows, an
+ * antivirus real-time scan can hold an exclusive lock on a freshly-downloaded
+ * .exe long enough that fsp.copyFile() just never returns -- no EBUSY/EPERM
+ * ever gets thrown for copyFileWithRetry to retry against, it just hangs.
+ * This doesn't cancel the underlying operation (Node can't), but it stops
+ * the request/UI from waiting forever and surfaces a clear, actionable error
+ * instead of an indefinite silent hang.
+ */
+function withHardTimeout(promise, timeoutMs, label) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${timeoutMs}ms -- an antivirus scan locking the new file is the most common cause on Windows`)),
+      timeoutMs
+    );
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function fetchLatestReleaseAsset() {
   const tag = settings.cliproxyVersion === "latest" ? "latest" : `tags/${settings.cliproxyVersion}`;
   const url = `https://api.github.com/repos/${GITHUB_REPO}/releases/${tag}`;
-  const res = await fetch(url, { headers: { "User-Agent": "renn-copilot" } });
-  if (!res.ok) throw new Error(`Failed to query GitHub releases (${res.status})`);
-  const release = await res.json();
+  const release = await withTimeout(15_000, async (signal) => {
+    const res = await fetch(url, { headers: { "User-Agent": "renn-copilot" }, signal });
+    if (!res.ok) throw new Error(`Failed to query GitHub releases (${res.status})`);
+    return res.json();
+  });
   const { osKey, archKey } = platformKeywords();
 
   // linux/freebsd releases ship both a full build and a "_no-plugin" variant
@@ -85,9 +175,15 @@ async function fetchLatestReleaseAsset() {
 }
 
 async function downloadToFile(url, destPath) {
-  const res = await fetch(url, { headers: { "User-Agent": "renn-copilot" } });
-  if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
-  const buffer = await res.arrayBuffer();
+  // The binary itself is ~45MB -- generous but still bounded, so a truly
+  // stalled connection (including one that stalls mid-transfer, after
+  // headers already arrived) fails within a couple minutes instead of
+  // hanging forever.
+  const buffer = await withTimeout(120_000, async (signal) => {
+    const res = await fetch(url, { headers: { "User-Agent": "renn-copilot" }, signal });
+    if (!res.ok) throw new Error(`Download failed (${res.status}) for ${url}`);
+    return res.arrayBuffer();
+  });
   await fsp.writeFile(destPath, Buffer.from(buffer));
 }
 
@@ -132,25 +228,26 @@ export async function installOrUpdateBinary() {
     await downloadToFile(url, archivePath);
 
     if (name.endsWith(".zip")) {
-      await extractZip(archivePath, { dir: tmpDir });
+      await withHardTimeout(extractZip(archivePath, { dir: tmpDir }), 60_000, "Extracting archive");
     } else if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) {
-      await tar.x({ file: archivePath, cwd: tmpDir });
+      await withHardTimeout(tar.x({ file: archivePath, cwd: tmpDir }), 60_000, "Extracting archive");
     } else {
       // Some releases ship the raw binary with no archive extension.
-      await copyFileWithRetry(archivePath, binaryPath());
+      await withHardTimeout(copyFileWithRetry(archivePath, binaryPath()), 60_000, "Copying binary into place");
     }
 
     // Locate the extracted binary (it may be nested in a subfolder).
     const expectedName = process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
-    const found = await findFileRecursive(tmpDir, expectedName);
+    const found = await withHardTimeout(findFileRecursive(tmpDir, expectedName), 15_000, "Locating extracted binary");
     if (found) {
-      await copyFileWithRetry(found, binaryPath());
+      pushLog("Copying binary into place (can be slow if antivirus is scanning the new file)...");
+      await withHardTimeout(copyFileWithRetry(found, binaryPath()), 60_000, "Copying binary into place");
     }
     if (process.platform !== "win32") {
-      await fsp.chmod(binaryPath(), 0o755);
+      await withHardTimeout(fsp.chmod(binaryPath(), 0o755), 10_000, "chmod");
     }
 
-    await fsp.rm(tmpDir, { recursive: true, force: true });
+    await withHardTimeout(fsp.rm(tmpDir, { recursive: true, force: true }), 15_000, "Cleaning up temp files");
     pushLog(`CLIProxyAPI ${version} installed at ${binaryPath()}`);
     return version;
   } finally {
@@ -221,6 +318,12 @@ export function ensureDefaultConfig() {
     "auth-dir": path.join(settings.cliproxyHome, "auths"),
     debug: false,
     "request-log": true,
+    // "request-log" alone only controls whether CLIProxyAPI logs requests at
+    // all -- its Management API's GET /logs (what the dashboard's Logs page
+    // reads) additionally requires this to be on, or it responds
+    // {"error":"logging to file disabled"} and the page shows nothing.
+    "logging-to-file": true,
+    "logs-max-total-size-mb": 100,
     "remote-management": {
       "allow-remote": false,
       "secret-key": managementKey,
@@ -310,12 +413,41 @@ export function ensureProxyApiKey() {
 
   const ownKeys = loadOwnKeys();
   const proxyApiKey = ownKeys.proxyApiKey || settings.proxyApiKey || crypto.randomBytes(24).toString("hex");
-  doc["api-keys"] = [proxyApiKey];
-  fs.writeFileSync(configPath(), yaml.dump(doc), "utf8");
+  const patchedText = patchTopLevelList(fs.readFileSync(configPath(), "utf8"), "api-keys", [proxyApiKey]);
+  fs.writeFileSync(configPath(), patchedText, "utf8");
   settings.proxyApiKey = proxyApiKey;
   saveOwnKeys({ proxyApiKey });
   pushLog(`Backfilled a proxy API key into config.yaml (restart CLIProxyAPI to apply).`);
   return proxyApiKey;
+}
+
+/**
+ * Backfills "logging-to-file" into an existing config.yaml that predates
+ * this feature -- without it, CLIProxyAPI's Management API GET /logs (what
+ * the dashboard's Logs page reads for the "CLIProxyAPI" tab) returns
+ * {"error":"logging to file disabled"} even though request-log is on.
+ * Requires a restart to take effect since CLIProxyAPI reads config.yaml at
+ * startup for this option (unlike api-keys, which it hot-reloads).
+ */
+export function ensureLoggingToFile() {
+  if (!fs.existsSync(configPath())) return { changed: false };
+  let doc;
+  try {
+    doc = yaml.load(fs.readFileSync(configPath(), "utf8")) || {};
+  } catch (err) {
+    pushLog(`Warning: could not parse config.yaml (${err.message})`);
+    return { changed: false };
+  }
+
+  if (doc["logging-to-file"] === true) return { changed: false };
+
+  let patchedText = patchTopLevelScalar(fs.readFileSync(configPath(), "utf8"), "logging-to-file", "true");
+  if (doc["logs-max-total-size-mb"] === undefined) {
+    patchedText = patchTopLevelScalar(patchedText, "logs-max-total-size-mb", "100");
+  }
+  fs.writeFileSync(configPath(), patchedText, "utf8");
+  pushLog(`Backfilled logging-to-file into config.yaml (restart CLIProxyAPI to apply).`);
+  return { changed: true };
 }
 
 /**
@@ -343,8 +475,8 @@ export function setProxyAuthEnabled(enabled) {
   const currentKeys = Array.isArray(doc["api-keys"]) ? doc["api-keys"] : [];
   if (JSON.stringify(currentKeys) === JSON.stringify(nextKeys)) return { changed: false };
 
-  doc["api-keys"] = nextKeys;
-  fs.writeFileSync(configPath(), yaml.dump(doc), "utf8");
+  const patchedText = patchTopLevelList(fs.readFileSync(configPath(), "utf8"), "api-keys", nextKeys);
+  fs.writeFileSync(configPath(), patchedText, "utf8");
   pushLog(
     enabled
       ? "Re-enabled proxy API key authentication."
@@ -359,6 +491,7 @@ export async function startServer() {
     throw new Error("CLIProxyAPI binary not installed yet. Call /server/install first.");
   }
   ensureDefaultConfig();
+  ensureLoggingToFile();
   loadManagementKeyFromConfig();
   loadProxyApiKeyFromConfig();
 

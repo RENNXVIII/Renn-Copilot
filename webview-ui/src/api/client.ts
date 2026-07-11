@@ -70,6 +70,11 @@ export interface AuthFileEntry {
   unavailable?: boolean;
   next_retry_after?: string | number | null;
   auth_index?: string;
+  // Namespaces this credential's models as "<prefix>/<model-id>", a routable
+  // id only this credential serves -- see setAuthFilePrefix below. Read
+  // straight off the auth file on disk since CLIProxyAPI's Management API
+  // doesn't surface it in GET /auth-files.
+  prefix?: string;
 }
 
 export interface UsageBucket {
@@ -112,9 +117,11 @@ export interface CodexRateWindow {
   resetAfterSeconds: number | null;
 }
 
-export interface CodexUsageEntry {
-  name: string;
-  label: string;
+// Only Codex has a real-time quota fetcher -- Antigravity's Gemini-only,
+// no-5h/weekly-split data was removed since it couldn't match this shape and
+// there's no legitimate remote API for its Claude/GPT usage (would require
+// spoofing a client identity to Google, which isn't worth the account-ban risk).
+export interface CredentialQuota {
   ok: boolean;
   reason?: string;
   planType?: string | null;
@@ -122,20 +129,19 @@ export interface CodexUsageEntry {
   secondary?: CodexRateWindow | null;
 }
 
-export interface AntigravityQuotaBucket {
-  modelId: string | null;
-  usedPercent: number | null;
-  resetAfterSeconds: number | null;
-}
-
-export interface AntigravityUsageEntry {
+export interface CredentialUsageEntry {
   name: string;
   label: string;
-  ok: boolean;
-  reason?: string;
-  verifyUrl?: string;
-  worst?: AntigravityQuotaBucket | null;
-  buckets?: AntigravityQuotaBucket[];
+  provider: string;
+  disabled: boolean;
+  unavailable: boolean;
+  requests: number;
+  failedRequests: number;
+  totalTokens: number;
+  cacheRate: number;
+  window5hTokens: number;
+  window7dTokens: number;
+  quota: CredentialQuota | null;
 }
 
 export interface UsageTokenTotals {
@@ -238,14 +244,20 @@ export const api = {
   getAuthFiles: () => request<{ files: AuthFileEntry[] }>("/auth-files"),
   getUsage: () => request<UsageResponse>("/usage"),
   getUsageTokens: (days = 7) => request<UsageTokenSummary>(`/usage/tokens?days=${days}`),
-  getCodexLimits: () => request<{ accounts: CodexUsageEntry[] }>("/usage/codex-limits"),
-  getAntigravityLimits: () => request<{ accounts: AntigravityUsageEntry[] }>("/usage/antigravity-limits"),
+  getUsageCredentials: () => request<{ credentials: CredentialUsageEntry[] }>("/usage/credentials"),
   deleteAuthFile: (name: string) =>
     request<{ status: string }>(`/auth-files/${encodeURIComponent(name)}`, { method: "DELETE" }),
   setAuthFileDisabled: (name: string, disabled: boolean) =>
     request<{ status: string; disabled: boolean }>("/auth-files/status", {
       method: "PATCH",
       body: JSON.stringify({ name, disabled }),
+    }),
+  // Sets or clears (pass "") this credential's model-id prefix. Only letters,
+  // numbers, hyphens and underscores are accepted -- validated server-side too.
+  setAuthFilePrefix: (name: string, prefix: string) =>
+    request<{ status: string }>("/auth-files/prefix", {
+      method: "PATCH",
+      body: JSON.stringify({ name, prefix }),
     }),
   resetQuota: (authIndex: string) =>
     request<{ status: string; auth_index: string }>("/auth-files/reset-quota", {

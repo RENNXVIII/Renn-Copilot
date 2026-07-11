@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import { useEmailReveal } from "../hooks/useEmailReveal";
@@ -9,7 +9,28 @@ const TOKEN_USAGE_DAYS = 7;
 export function Overview({ onNavigate }: { onNavigate: (page: string) => void }) {
   const { data: status, mutate: refreshStatus } = usePolling(api.getStatus, 4000);
   const [busy, setBusy] = useState<string | null>(null);
+  const [busyElapsed, setBusyElapsed] = useState(0);
   const { revealed } = useEmailReveal();
+
+  // Install/update is a single blocking call that can take minutes on a slow
+  // connection (downloading CLIProxyAPI's ~45MB binary) -- with no feedback
+  // beyond a static "Installing..." label, a genuinely slow-but-working
+  // download is indistinguishable from a hung one. Tail the backend's own
+  // process log (which gets a line the instant each phase starts, e.g.
+  // "Downloading CLIProxyAPI vX...") and show elapsed time so it's clear
+  // something is actually happening.
+  const { data: ownLogs } = usePolling(api.getOwnLogs, 1500, busy === "install");
+  const lastLogLine = ownLogs?.lines?.[ownLogs.lines.length - 1];
+
+  useEffect(() => {
+    if (busy === null) {
+      setBusyElapsed(0);
+      return;
+    }
+    const start = Date.now();
+    const id = setInterval(() => setBusyElapsed(Math.round((Date.now() - start) / 1000)), 1000);
+    return () => clearInterval(id);
+  }, [busy]);
 
   const serverRunning = status?.running ?? false;
   const { data: models } = usePolling(api.getModels, 15000, serverRunning);
@@ -96,7 +117,7 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
           </div>
           <div className="btn-row">
             <button className="btn secondary" disabled={busy !== null} onClick={() => run("install", api.install)}>
-              {busy === "install" ? "Installing..." : "Install / Update binary"}
+              {busy === "install" ? `Installing... (${busyElapsed}s)` : "Install / Update binary"}
             </button>
             <button className="btn" disabled={busy !== null || status?.running} onClick={() => run("start", api.start)}>
               {busy === "start" ? "Starting..." : "Start"}
@@ -112,6 +133,11 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
               {busy === "restart" ? "Restarting..." : "Restart"}
             </button>
           </div>
+          {busy === "install" && (
+            <p className="card-desc" style={{ marginTop: 6 }}>
+              {lastLogLine ? lastLogLine.replace(/^\[[^\]]+\]\s*/, "") : "Starting install..."}
+            </p>
+          )}
         </div>
 
         <div className="card">

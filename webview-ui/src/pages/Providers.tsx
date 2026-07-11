@@ -14,6 +14,7 @@ const PROVIDER_CARDS: {
   apiKey: { label: string; getter: () => Promise<{ items: ApiKeyEntry[] }>; setter: (items: ApiKeyEntry[]) => Promise<{ items: ApiKeyEntry[] }> };
   oauthDisabled?: boolean;
   oauthDisabledReason?: string;
+  note?: string;
 }[] = [
   {
     id: "antigravity",
@@ -26,9 +27,10 @@ const PROVIDER_CARDS: {
     label: "Claude / Claude Code",
     description: "Login with your Claude.ai / Claude Code account (Anthropic OAuth).",
     apiKey: { label: "Claude API Key", getter: api.getClaudeKeys, setter: api.setClaudeKeys },
-    oauthDisabled: true,
-    oauthDisabledReason:
-      'Anthropic now bills third-party OAuth usage as "extra usage" instead of plan quota -- disabled here until that\'s resolved. Use "Add via API key" instead.',
+    note:
+      'Anthropic now bills third-party OAuth usage as "extra usage" instead of plan quota: "Third-party apps now draw ' +
+      'from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going." Add extra ' +
+      "usage credit at claude.ai/settings/usage, or use \"Add via API key\" for separate (non-plan) billing instead.",
   },
   {
     id: "codex",
@@ -93,6 +95,7 @@ export function Providers() {
   const [resetting, setResetting] = useState<Record<string, boolean>>({});
   const [restarting, setRestarting] = useState(false);
   const { revealed, toggle: toggleRevealed } = useEmailReveal();
+  const [savingPrefix, setSavingPrefix] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     setBannedUntil(loadBans());
@@ -190,6 +193,25 @@ export function Providers() {
     }
   }
 
+  // Gives a credential its own routable "<prefix>/<model-id>" ids so it can
+  // be toggled independently from other credentials serving the same bare
+  // model id (e.g. Antigravity and Claude Code both offering the identical
+  // "claude-sonnet-4-6"). Only takes real effect once CLIProxyAPI's
+  // force-model-prefix is on -- otherwise the bare id still pools this
+  // credential in too. See model-catalog.js's buildModelList for how the
+  // Models page resolves prefixed ids back to a provider.
+  async function savePrefix(f: AuthFileEntry, prefix: string) {
+    const trimmed = prefix.trim();
+    if (trimmed === (f.prefix || "")) return;
+    setSavingPrefix((s) => ({ ...s, [f.name]: true }));
+    try {
+      await api.setAuthFilePrefix(f.name, trimmed);
+    } finally {
+      setSavingPrefix((s) => ({ ...s, [f.name]: false }));
+      mutate(undefined, true);
+    }
+  }
+
   function setBan(provider: string, deadline: number) {
     setBannedUntil((b) => {
       const next = { ...b, [provider]: deadline };
@@ -262,40 +284,62 @@ export function Providers() {
             </div>
           )}
           {oauthAccounts.map((f) => (
-            <div key={f.name} className="cred-row">
-              <div>
-                <div>{f.email ? <MaskedEmail email={f.email} revealed={revealed} /> : f.name}</div>
-                <div className="cred-row-sub">OAuth · {f.provider}</div>
-              </div>
-              <div className="btn-row" style={{ alignItems: "center" }}>
-                {f.unavailable && (
-                  <span className="badge neutral">
-                    Quota exceeded{formatNextRetry(f.next_retry_after) ? ` · retry ~${formatNextRetry(f.next_retry_after)}` : ""}
+            <div key={f.name} className="cred-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+                <div>
+                  <div>{f.email ? <MaskedEmail email={f.email} revealed={revealed} /> : f.name}</div>
+                  <div className="cred-row-sub">OAuth · {f.provider}</div>
+                </div>
+                <div className="btn-row" style={{ alignItems: "center" }}>
+                  {f.unavailable && (
+                    <span className="badge neutral">
+                      Quota exceeded{formatNextRetry(f.next_retry_after) ? ` · retry ~${formatNextRetry(f.next_retry_after)}` : ""}
+                    </span>
+                  )}
+                  <span
+                    className={`badge ${f.status === "ready" ? "success" : "neutral"}`}
+                    title={
+                      f.status !== "ready"
+                        ? "Raw status reported by CLIProxyAPI -- can lag behind reality (e.g. still show \"error\" after a resolved quota issue) until CLIProxyAPI restarts."
+                        : undefined
+                    }
+                  >
+                    {f.status}
                   </span>
-                )}
-                <span
-                  className={`badge ${f.status === "ready" ? "success" : "neutral"}`}
-                  title={
-                    f.status !== "ready"
-                      ? "Raw status reported by CLIProxyAPI -- can lag behind reality (e.g. still show \"error\" after a resolved quota issue) until CLIProxyAPI restarts."
-                      : undefined
-                  }
-                >
-                  {f.status}
+                  <span className="card-desc">{f.disabled ? "Inactive" : "Active"}</span>
+                  <input type="checkbox" className="toggle" checked={!f.disabled} onChange={(e) => toggleActive(f, e.target.checked)} />
+                  <button
+                    className="btn secondary"
+                    disabled={!f.auth_index || resetting[f.name]}
+                    title={!f.auth_index ? "No auth_index reported for this credential" : undefined}
+                    onClick={() => handleResetQuota(f)}
+                  >
+                    {resetting[f.name] ? "Resetting..." : "Reset Quota"}
+                  </button>
+                  <button className="btn secondary" onClick={() => api.deleteAuthFile(f.name).then(() => mutate(undefined, true))}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span className="card-desc" style={{ minWidth: 40 }}>
+                  Prefix
                 </span>
-                <span className="card-desc">{f.disabled ? "Inactive" : "Active"}</span>
-                <input type="checkbox" className="toggle" checked={!f.disabled} onChange={(e) => toggleActive(f, e.target.checked)} />
-                <button
-                  className="btn secondary"
-                  disabled={!f.auth_index || resetting[f.name]}
-                  title={!f.auth_index ? "No auth_index reported for this credential" : undefined}
-                  onClick={() => handleResetQuota(f)}
-                >
-                  {resetting[f.name] ? "Resetting..." : "Reset Quota"}
-                </button>
-                <button className="btn secondary" onClick={() => api.deleteAuthFile(f.name).then(() => mutate(undefined, true))}>
-                  Remove
-                </button>
+                <input
+                  className="text-input"
+                  style={{ width: 140 }}
+                  placeholder="none"
+                  defaultValue={f.prefix || ""}
+                  key={`${f.name}-${f.prefix || ""}`}
+                  onBlur={(e) => savePrefix(f, e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+                  }}
+                  disabled={savingPrefix[f.name]}
+                />
+                <span className="card-desc" title="When set, this account's models get a distinct '<prefix>/<model-id>' id on the Models page, addressable independently from other accounts serving the same bare model id.">
+                  {f.prefix ? `→ models appear as "${f.prefix}/<model-id>"` : "optional -- namespaces this account's models"}
+                </span>
               </div>
             </div>
           ))}
@@ -396,6 +440,11 @@ export function Providers() {
               </div>
               <div className="card-desc">{p.description}</div>
               {p.oauthDisabled && <p className="card-desc">{p.oauthDisabledReason}</p>}
+              {p.note && (
+                <p className="card-desc" style={{ color: "var(--vscode-editorWarning-foreground, #cca700)" }}>
+                  {p.note}
+                </p>
+              )}
               {isBanned ? (
                 <p className="card-desc" style={{ color: "var(--vscode-errorForeground)" }}>
                   Rate-limited by the provider — retry in {formatRemaining(banDeadline - now)}

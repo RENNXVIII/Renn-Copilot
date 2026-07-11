@@ -56,10 +56,21 @@ function guessProvider(id, loggedInProviders = []) {
   if (loggedInProviders.length === 1) return loggedInProviders[0];
 
   const lower = id.toLowerCase();
-  if (lower.includes("gemini")) return "antigravity"; // Gemini is Antigravity-only today
-  if (lower.includes("claude")) return "claude";
-  if (lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)) return "codex";
-  return "other";
+  const guess = lower.includes("gemini")
+    ? "antigravity" // Gemini is Antigravity-only today
+    : lower.includes("claude")
+      ? "claude"
+      : lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)
+        ? "codex"
+        : "other";
+
+  // Only trust the name-based guess if that provider is actually logged in
+  // right now -- otherwise (e.g. a claude-named id naively guessed as
+  // "claude" when only antigravity+codex are logged in, because the real
+  // Claude Code login was never completed or was removed) this would invent
+  // a phantom provider group with zero credentials behind it. "other" is an
+  // honest "couldn't attribute this" bucket instead of a confidently wrong one.
+  return loggedInProviders.includes(guess) ? guess : "other";
 }
 
 /**
@@ -74,7 +85,11 @@ function guessProvider(id, loggedInProviders = []) {
  */
 function resolveProvider(id, loggedInProviders, memory) {
   if (loggedInProviders.length === 1) return loggedInProviders[0];
-  if (memory[id]) return memory[id];
+  // Only trust a learned attribution if that provider is *still* logged in --
+  // otherwise a model we once saw under (say) antigravity would keep showing
+  // under a phantom "antigravity" group after that provider is logged out,
+  // even though it's now actually served by whichever provider remains.
+  if (memory[id] && loggedInProviders.includes(memory[id])) return memory[id];
   return guessProvider(id, loggedInProviders);
 }
 
@@ -130,8 +145,18 @@ function buildCustomProviderIndex(openAiCompatEntries = []) {
  * Returns the updated memory alongside the model list -- the caller
  * (routes.js) is responsible for persisting it via state.js so the learned
  * attribution survives across requests and server restarts.
+ *
+ * `prefixIndex` maps a credential's `prefix` (see routes.js's
+ * /auth-files/prefix, management-client.js's setAuthFilePrefix) to its real
+ * provider. A live id like "claude/claude-sonnet-4-6" -- CLIProxyAPI's own
+ * namespacing for a prefixed credential, giving it a routable id no other
+ * credential shares -- resolves straight to that credential's actual
+ * provider here, with total certainty (no guessing needed): this is exactly
+ * the mechanism that lets two credentials serving the identical bare model
+ * id (e.g. Antigravity and Claude Code both offering "claude-sonnet-4-6")
+ * be told apart and toggled independently in the Models page.
  */
-export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompatEntries = [], memory = {}) {
+export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompatEntries = [], memory = {}, prefixIndex = {}) {
   if (!liveIds.length) return { models: [], memory };
 
   const byId = new Map(MODEL_CATALOG.map((m) => [m.id, m]));
@@ -139,6 +164,22 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
   const nextMemory = { ...memory };
 
   const models = liveIds.map((id) => {
+    const slash = id.indexOf("/");
+    if (slash > 0) {
+      const prefix = id.slice(0, slash);
+      const owner = prefixIndex[prefix];
+      if (owner) {
+        const rest = id.slice(slash + 1);
+        return {
+          id,
+          provider: owner,
+          family: owner,
+          label: `${rest} (${prefix}, via ${owner})`,
+          thinking: /thinking/i.test(id),
+        };
+      }
+    }
+
     const customProvider = customProviderById.get(id);
     if (customProvider) {
       return {
@@ -187,12 +228,20 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
  * a clear request error when an image is actually sent, while a wrong
  * `false` would silently disable attachments with no error at all.
  */
-export function toCopilotModelEntry(model, { proxyUrl }) {
+export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl }) {
   const verifiedVision = model.capabilities?.vision;
+  // Claude-family models (any provider -- Antigravity, Claude Code login, or
+  // a custom endpoint) get routed through our own sanitizing proxy instead
+  // of straight to CLIProxyAPI, since Anthropic rejects non-default
+  // top_p/temperature/top_k on Claude Opus 4.7+/Sonnet 4.5+ and CLIProxyAPI
+  // forwards them unmodified (see chat-proxy.js). Everything else is
+  // unaffected and keeps going directly to CLIProxyAPI.
+  const isClaude = /claude/i.test(model.id);
+  const url = isClaude && ownBaseUrl ? `${ownBaseUrl}/api/proxy/v1/chat/completions` : `${proxyUrl}/v1/chat/completions`;
   return {
     id: model.id,
     name: model.label,
-    url: `${proxyUrl}/v1/chat/completions`,
+    url,
     toolCalling: true,
     vision: verifiedVision === false ? false : true,
     maxInputTokens: model.thinking ? 32000 : 128000,

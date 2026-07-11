@@ -1,20 +1,9 @@
 import { useMemo, useState } from "react";
-import {
-  api,
-  type AntigravityUsageEntry,
-  type CodexRateWindow,
-  type CodexUsageEntry,
-  type ProviderModelUsage,
-  type RecentUsageRecord,
-  type UsageAccount,
-  type UsageApiKey,
-  type UsageBucket,
-} from "../api/client";
+import { api, type ProviderModelUsage, type RecentUsageRecord } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
-import { MaskedEmail } from "../components/Modal";
-import { useEmailReveal } from "../hooks/useEmailReveal";
 import { TrendChart } from "../components/shared";
-import { postOpenExternal } from "../vscodeApi";
+import { ratesFor, formatUsd, formatNumber } from "../lib/utils";
+import { AuthFilesTable } from "../components/AuthFilesTable";
 
 type SortKey = "provider" | "model" | "requests" | "input_tokens" | "output_tokens" | "total_tokens";
 
@@ -30,23 +19,6 @@ const SORTABLE_COLUMNS: { key: SortKey; label: string; right?: boolean }[] = [
 const BUCKET_WINDOW_LABEL = "last ~3.3h";
 const TOKEN_USAGE_DAYS = 7;
 
-const PRICING_PER_MILLION: Record<string, { input: number; output: number }> = {
-  claude: { input: 3, output: 15 },
-  anthropic: { input: 3, output: 15 },
-  gemini: { input: 1.25, output: 5 },
-  antigravity: { input: 1.25, output: 5 },
-  codex: { input: 2, output: 8 },
-  chatgpt: { input: 2, output: 8 },
-  openai: { input: 2, output: 8 },
-};
-const DEFAULT_PRICING = { input: 1, output: 3 };
-
-function ratesFor(provider: string) {
-  const key = provider.toLowerCase();
-  const match = Object.keys(PRICING_PER_MILLION).find((k) => key.includes(k));
-  return match ? PRICING_PER_MILLION[match] : DEFAULT_PRICING;
-}
-
 function estimateCostUsd(rows: ProviderModelUsage[]): number {
   return rows.reduce((sum, r) => {
     const rates = ratesFor(r.provider);
@@ -54,61 +26,11 @@ function estimateCostUsd(rows: ProviderModelUsage[]): number {
   }, 0);
 }
 
-function formatUsd(n: number) {
-  return n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: n < 1 ? 4 : 2 });
-}
-
-function formatNumber(n: number) {
-  return n.toLocaleString("en-US");
-}
-
-function parseRetryAfter(value: string | number | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  const asNum = typeof value === "number" ? value : Number(value);
-  if (!Number.isNaN(asNum) && asNum > 0) return asNum > 1e12 ? asNum : asNum * 1000;
-  const parsed = Date.parse(String(value));
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
-function formatResetIn(epochMs: number | null): string | null {
-  if (epochMs === null) return null;
-  const diffMs = epochMs - Date.now();
-  if (diffMs <= 0) return "should be available now";
-  const mins = Math.round(diffMs / 60000);
-  if (mins < 60) return `~${mins}m`;
-  const hours = Math.floor(mins / 60);
-  const remMins = mins % 60;
-  return `~${hours}h${remMins ? ` ${remMins}m` : ""}`;
-}
-
-function getHealth(usage: UsageAccount | UsageApiKey): { critical: boolean; reason: string } {
-  const isAccount = "label" in usage;
-  if (isAccount && usage.disabled) return { critical: true, reason: "Account is inactive" };
-  if (isAccount && usage.unavailable) return { critical: true, reason: "CLIProxyAPI reports quota exceeded" };
-  return { critical: false, reason: "Available" };
-}
-
 export function Usage() {
   const { data: status } = usePolling(api.getStatus, 4000);
   const serverRunning = status?.running ?? false;
   const { data, error } = usePolling(api.getUsage, 10000, serverRunning);
   const { data: tokenData, error: tokenError } = usePolling(() => api.getUsageTokens(TOKEN_USAGE_DAYS), 20000, serverRunning);
-  const hasCodexAccounts = (data?.accounts ?? []).some((a) => a.provider === "codex");
-  const { data: codexLimits } = usePolling(api.getCodexLimits, 60000, serverRunning && hasCodexAccounts);
-  const codexLimitsByName = useMemo(() => {
-    const map = new Map<string, CodexUsageEntry>();
-    for (const entry of codexLimits?.accounts ?? []) map.set(entry.name, entry);
-    return map;
-  }, [codexLimits]);
-
-  const hasAntigravityAccounts = (data?.accounts ?? []).some((a) => a.provider === "antigravity");
-  const { data: antigravityLimits } = usePolling(api.getAntigravityLimits, 60000, serverRunning && hasAntigravityAccounts);
-  const antigravityLimitsByName = useMemo(() => {
-    const map = new Map<string, AntigravityUsageEntry>();
-    for (const entry of antigravityLimits?.accounts ?? []) map.set(entry.name, entry);
-    return map;
-  }, [antigravityLimits]);
-  const { revealed } = useEmailReveal();
 
   const [tableQuery, setTableQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("total_tokens");
@@ -146,6 +68,8 @@ export function Usage() {
 
       {!serverRunning && <div className="empty-hint">CLIProxyAPI isn't running, so there's no usage data to show. Go to Overview and click Start first.</div>}
       {serverRunning && error && <div className="empty-hint">Couldn't load usage: {error.message}</div>}
+
+      {serverRunning && <AuthFilesTable />}
 
       {serverRunning && (
         <div className="card">
@@ -250,43 +174,6 @@ export function Usage() {
       )}
 
       {serverRunning && successRate !== null && <p className="page-hint">Success rate: {successRate}% across all accounts and keys.</p>}
-
-      {serverRunning && ((data?.accounts?.length ?? 0) > 0 || (data?.apiKeys?.length ?? 0) > 0) && (
-        <div className="card">
-          <div className="card-title">Health monitor</div>
-          <div className="card-desc">Live auth status across every account & key.</div>
-          <div className="grid">
-            {data?.accounts?.map((a) => <HealthCard key={a.name} usage={a} revealed={revealed} />)}
-            {data?.apiKeys?.map((k, i) => <HealthCard key={`${k.provider}-${i}`} usage={k} revealed={revealed} />)}
-          </div>
-        </div>
-      )}
-
-      <div className="card">
-        <div className="card-title">OAuth accounts</div>
-        <div className="card-desc">Per-account request counts. Manage logins on the Providers page.</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {serverRunning && !data?.accounts?.length && <p className="card-desc">No accounts logged in yet.</p>}
-          {data?.accounts?.map((a) => (
-            <UsageRow
-              key={a.name}
-              usage={a}
-              revealed={revealed}
-              codexLimits={a.provider === "codex" ? codexLimitsByName.get(a.name) : undefined}
-              antigravityLimits={a.provider === "antigravity" ? antigravityLimitsByName.get(a.name) : undefined}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="card-title">API keys</div>
-        <div className="card-desc">Non-OAuth providers. Manage on the Providers page.</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {serverRunning && !data?.apiKeys?.length && <p className="card-desc">No API keys configured yet.</p>}
-          {data?.apiKeys?.map((k, i) => <UsageRow key={`${k.provider}-${i}`} usage={k} revealed={revealed} />)}
-        </div>
-      </div>
     </div>
   );
 }
@@ -302,191 +189,3 @@ function KpiBlock({ label, value, color }: { label: string; value: string; color
   );
 }
 
-function HealthCard({ usage, revealed }: { usage: UsageAccount | UsageApiKey; revealed: boolean }) {
-  const isAccount = "label" in usage;
-  const { critical, reason } = getHealth(usage);
-  const resetIn = isAccount ? formatResetIn(parseRetryAfter(usage.next_retry_after)) : null;
-  return (
-    <div className="health-row">
-      <span className={`health-dot ${critical ? "bad" : "ok"}`} />
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div className="health-label">{isAccount ? <MaskedEmail email={usage.label} revealed={revealed} /> : usage.name || usage.keyMasked}</div>
-        <div className="card-desc" style={critical ? { color: "var(--vscode-editorWarning-foreground)" } : undefined}>
-          {reason}
-          {resetIn && critical ? ` · resets ${resetIn}` : ""}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function UsageRow({
-  usage,
-  revealed,
-  codexLimits,
-  antigravityLimits,
-}: {
-  usage: UsageAccount | UsageApiKey;
-  revealed: boolean;
-  codexLimits?: CodexUsageEntry;
-  antigravityLimits?: AntigravityUsageEntry;
-}) {
-  const isAccount = "label" in usage;
-  const subtitle = isAccount ? usage.provider : `${usage.provider}${usage.baseUrl ? ` · ${usage.baseUrl}` : ""}`;
-  const resetIn = isAccount ? formatResetIn(parseRetryAfter(usage.next_retry_after)) : null;
-  const total = usage.success + usage.failed;
-  const successPct = total > 0 ? Math.round((usage.success / total) * 100) : null;
-  const { critical } = getHealth(usage);
-
-  return (
-    <div className="cred-row" style={{ alignItems: "center" }}>
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <span className={`health-dot ${critical ? "bad" : "ok"}`} />
-          <span>{isAccount ? <MaskedEmail email={usage.label} revealed={revealed} /> : usage.keyMasked}</span>
-          {isAccount && usage.disabled && <span className="badge neutral">Inactive</span>}
-          {isAccount && usage.unavailable && (
-            <span className="badge neutral">Quota exceeded{resetIn ? ` · resets ${resetIn}` : ""}</span>
-          )}
-        </div>
-        <div className="cred-row-sub">{subtitle}</div>
-        {total > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
-            <div className="progress-track">
-              <div className="progress-fill" style={{ width: `${successPct}%`, background: critical ? "var(--vscode-editorWarning-foreground, #cca700)" : "var(--vscode-testing-iconPassed, #4caf50)" }} />
-            </div>
-            <span className="card-desc">{successPct}%</span>
-          </div>
-        )}
-        {codexLimits && <CodexRateLimits entry={codexLimits} />}
-        {antigravityLimits && <AntigravityRateLimit entry={antigravityLimits} />}
-      </div>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div style={{ textAlign: "right" }}>
-          <div>
-            <span style={{ color: "var(--vscode-testing-iconPassed, #4caf50)" }}>{usage.success}</span>
-            {" / "}
-            <span style={usage.failed > 0 ? { color: "var(--vscode-errorForeground)" } : undefined}>{usage.failed}</span>
-          </div>
-          <div className="card-desc">ok / failed</div>
-        </div>
-        <Sparkline buckets={usage.recent_requests} />
-      </div>
-    </div>
-  );
-}
-
-function formatWindowLabel(seconds: number | null): string {
-  if (!seconds) return "window";
-  const hours = seconds / 3600;
-  if (hours < 24) return `${Math.round(hours)}h`;
-  return `${Math.round(hours / 24)}d`;
-}
-
-function rateLimitColor(usedPercent: number | null): string {
-  if (usedPercent === null) return "var(--vscode-testing-iconPassed, #4caf50)";
-  if (usedPercent >= 90) return "var(--vscode-errorForeground)";
-  if (usedPercent >= 70) return "var(--vscode-editorWarning-foreground, #cca700)";
-  return "var(--vscode-testing-iconPassed, #4caf50)";
-}
-
-function CodexRateLimitBar({ window, label }: { window: CodexRateWindow; label: string }) {
-  const pct = window.usedPercent ?? 0;
-  const resetIn = window.resetAfterSeconds ? formatResetIn(Date.now() + window.resetAfterSeconds * 1000) : null;
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-      <span className="card-desc" style={{ minWidth: 28 }}>
-        {label}
-      </span>
-      <div className="progress-track">
-        <div className="progress-fill" style={{ width: `${pct}%`, background: rateLimitColor(window.usedPercent) }} />
-      </div>
-      <span className="card-desc" style={{ minWidth: 90 }}>
-        {window.usedPercent ?? "?"}% used{resetIn ? ` · resets ${resetIn}` : ""}
-      </span>
-    </div>
-  );
-}
-
-/**
- * Live ChatGPT rate-limit usage for a codex account, polled from the
- * undocumented chatgpt.com/backend-api/wham/usage endpoint (see backend's
- * codex-usage.js). "primary"/"secondary" are ChatGPT's own short/long usage
- * windows (typically ~5h and ~7d) -- shown separately from CLIProxyAPI's own
- * success/failed counters above since they measure different things.
- */
-function CodexRateLimits({ entry }: { entry: CodexUsageEntry }) {
-  if (!entry.ok) {
-    return <div className="card-desc" style={{ marginTop: 6 }}>ChatGPT usage: unavailable ({entry.reason ?? "unknown"})</div>;
-  }
-  if (!entry.primary && !entry.secondary) return null;
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
-      {entry.primary && <CodexRateLimitBar window={entry.primary} label={formatWindowLabel(entry.primary.windowSeconds)} />}
-      {entry.secondary && <CodexRateLimitBar window={entry.secondary} label={formatWindowLabel(entry.secondary.windowSeconds)} />}
-    </div>
-  );
-}
-
-/**
- * Live Gemini quota usage for an Antigravity account, from Google's real
- * Cloud Code Assist retrieveUserQuota endpoint (see backend's
- * antigravity-usage.js). Antigravity also routes to Claude/GPT models, but
- * there's no equivalent remote quota endpoint for those -- this only ever
- * reflects the Gemini-model buckets. Shows the single most-used model as a
- * compact summary (hover for the full per-model breakdown) rather than one
- * bar per model, since an account can have 8+ Gemini model buckets.
- */
-function AntigravityRateLimit({ entry }: { entry: AntigravityUsageEntry }) {
-  if (!entry.ok) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6, flexWrap: "wrap" }}>
-        <span className="card-desc">Gemini usage: unavailable ({entry.reason ?? "unknown"})</span>
-        {entry.verifyUrl && (
-          <button className="btn secondary" style={{ padding: "2px 8px" }} onClick={() => postOpenExternal(entry.verifyUrl!)}>
-            Verify now
-          </button>
-        )}
-      </div>
-    );
-  }
-  if (!entry.worst) return null;
-  const resetIn = entry.worst.resetAfterSeconds ? formatResetIn(Date.now() + entry.worst.resetAfterSeconds * 1000) : null;
-  const tooltip = (entry.buckets ?? [])
-    .map((b) => `${b.modelId ?? "?"}: ${b.usedPercent ?? "?"}% used`)
-    .join("\n");
-  return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }} title={tooltip}>
-      <span className="card-desc" style={{ minWidth: 28 }}>
-        gemini
-      </span>
-      <div className="progress-track">
-        <div className="progress-fill" style={{ width: `${entry.worst.usedPercent ?? 0}%`, background: rateLimitColor(entry.worst.usedPercent ?? null) }} />
-      </div>
-      <span className="card-desc" style={{ minWidth: 90 }}>
-        {entry.worst.usedPercent ?? "?"}% used ({entry.worst.modelId}){resetIn ? ` · resets ${resetIn}` : ""}
-      </span>
-    </div>
-  );
-}
-
-function Sparkline({ buckets }: { buckets: UsageBucket[] }) {
-  if (!buckets?.length) return <span className="card-desc">No recent activity</span>;
-  const max = Math.max(1, ...buckets.map((b) => b.success + b.failed));
-  return (
-    <div className="sparkline" title={`Request volume, ${BUCKET_WINDOW_LABEL}`}>
-      {buckets.map((b, i) => {
-        const total = b.success + b.failed;
-        const barPct = total > 0 ? Math.max(8, (total / max) * 100) : 0;
-        const successPct = total > 0 ? barPct * (b.success / total) : 0;
-        const failedPct = total > 0 ? barPct * (b.failed / total) : 0;
-        return (
-          <div key={i} className="sparkline-bar" title={`${b.time}: ${b.success} ok, ${b.failed} failed`}>
-            <div style={{ width: "100%", height: `${successPct}%`, background: "var(--vscode-testing-iconPassed, #4caf50)" }} />
-            <div style={{ width: "100%", height: `${failedPct}%`, background: "var(--vscode-testing-iconFailed, #f14c4c)" }} />
-          </div>
-        );
-      })}
-    </div>
-  );
-}
