@@ -8,6 +8,8 @@ import {
   stopServer,
   restartServer,
   setProxyAuthEnabled,
+  startXaiLogin,
+  getXaiLoginStatus,
 } from "./cliproxy-manager.js";
 import { management, patchRoutingStrategy, readRoutingStrategy } from "./management-client.js";
 import { listLiveModelIds, probeVisionSupport } from "./proxy-client.js";
@@ -362,6 +364,16 @@ const LOGIN_HANDLERS = {
 router.get(
   "/providers/:provider/login",
   asyncHandler(async (req, res) => {
+    // xAI has no Management API OAuth endpoint (see cliproxy-manager.js's
+    // startXaiLogin doc comment) -- it goes through a standalone CLI login
+    // process instead of the Management API flow every other provider uses,
+    // but returns the same { status, url, state } shape so the dashboard's
+    // existing startLogin/pollLogin flow doesn't need special-casing.
+    if (req.params.provider === "xai") {
+      const { url, state, userCode } = await startXaiLogin();
+      return res.json({ status: "ok", url, state: `xai:${state}`, userCode });
+    }
+
     const handler = LOGIN_HANDLERS[req.params.provider];
     if (!handler) {
       return res.status(400).json({
@@ -376,7 +388,16 @@ router.get(
 
 router.get(
   "/providers/login-status",
-  asyncHandler(async (req, res) => res.json(await management.getAuthStatus(req.query.state)))
+  asyncHandler(async (req, res) => {
+    const state = req.query.state || "";
+    // xAI login states are namespaced with an "xai:" prefix (see above) so
+    // this route can tell them apart from Management-API-issued OAuth states
+    // without a separate polling endpoint for the dashboard to call.
+    if (state.startsWith("xai:")) {
+      return res.json(getXaiLoginStatus(state.slice(4)));
+    }
+    res.json(await management.getAuthStatus(state));
+  })
 );
 
 // --- Model catalog + BYOK sync for the VS Code extension --------------------
@@ -632,6 +653,45 @@ router.put(
   asyncHandler(async (req, res) => {
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
     res.json({ items: normalizeList(await management.putOpenAiCompatibility(items)) });
+  })
+);
+
+// xAI has no dedicated Management API key list (confirmed against
+// help.router-for.me/management/api.html -- unlike gemini/claude/codex-key
+// below, there's no /xai-api-key endpoint at all). Its API is OpenAI-
+// compatible, so this reads/writes one openai-compatibility entry pinned to
+// api.x.ai instead, presenting it to the dashboard as a single { item }
+// (not a list) since xAI only ever needs the one shared entry -- multiple
+// raw keys can still round-robin inside its api-key-entries array.
+const XAI_BASE_URL = "https://api.x.ai/v1";
+
+async function findXaiEntry() {
+  const items = normalizeList(await management.getOpenAiCompatibility());
+  return items.find((e) => e["base-url"] === XAI_BASE_URL) || null;
+}
+
+router.get(
+  "/api-providers/xai-key",
+  asyncHandler(async (req, res) => res.json({ item: await findXaiEntry() }))
+);
+router.put(
+  "/api-providers/xai-key",
+  express.json(),
+  asyncHandler(async (req, res) => {
+    const incoming = req.body?.item;
+    const items = normalizeList(await management.getOpenAiCompatibility());
+    const idx = items.findIndex((e) => e["base-url"] === XAI_BASE_URL);
+
+    if (!incoming || !incoming["api-key-entries"]?.length) {
+      if (idx !== -1) items.splice(idx, 1);
+    } else {
+      const entry = { ...incoming, name: "xai", "base-url": XAI_BASE_URL };
+      if (idx === -1) items.push(entry);
+      else items[idx] = entry;
+    }
+
+    await management.putOpenAiCompatibility(items);
+    res.json({ item: await findXaiEntry() });
   })
 );
 

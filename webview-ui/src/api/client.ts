@@ -290,12 +290,24 @@ export const api = {
       body: JSON.stringify({ items }),
     }),
 
-  startLogin: (provider: "antigravity" | "claude" | "codex") =>
-    request<{ status: string; url: string; state: string }>(`/providers/${provider}/login`),
+  startLogin: (provider: "antigravity" | "claude" | "codex" | "xai") =>
+    // userCode is only ever set for xai (device-code flow) -- the URL already
+    // has it pre-filled as a query param, this is just a fallback display.
+    request<{ status: string; url: string; state: string; userCode?: string }>(`/providers/${provider}/login`),
   pollLoginStatus: (state: string) =>
     request<{ status: "wait" | "ok" | "error"; error?: string }>(
       `/providers/login-status?state=${encodeURIComponent(state)}`
     ),
+
+  // xAI has no dedicated Management API key list -- this is backed by one
+  // shared openai-compatibility entry pinned to api.x.ai instead (see
+  // routes.js's findXaiEntry). `item` is null when no key has been added yet.
+  getXaiKey: () => request<{ item: OpenAiCompatEntry | null }>("/api-providers/xai-key"),
+  setXaiKey: (item: OpenAiCompatEntry | null) =>
+    request<{ item: OpenAiCompatEntry | null }>("/api-providers/xai-key", {
+      method: "PUT",
+      body: JSON.stringify({ item }),
+    }),
 
   getRoutingStrategy: () => request<RoutingStrategy>("/routing-strategy"),
   setRoutingStrategy: (strategy: RoutingStrategy["strategy"]) =>

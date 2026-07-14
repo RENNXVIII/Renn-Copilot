@@ -9,6 +9,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   antigravity: "Antigravity",
   claude: "Claude",
   codex: "Codex",
+  xai: "xAI (Grok)",
 };
 
 type SortKey = "priority" | "requests" | "totalTokens" | "label";

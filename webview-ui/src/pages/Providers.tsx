@@ -7,11 +7,19 @@ import { maskKey } from "../lib/utils";
 import { Modal, ModalHeader, MaskedEmail } from "../components/Modal";
 import { postOpenExternal } from "../vscodeApi";
 
+const FIXED_PROVIDER_IDS = ["antigravity", "claude", "codex", "xai"] as const;
+type FixedProviderId = (typeof FIXED_PROVIDER_IDS)[number];
+
 const PROVIDER_CARDS: {
-  id: "antigravity" | "claude" | "codex";
+  id: FixedProviderId;
   label: string;
   description: string;
-  apiKey: { label: string; getter: () => Promise<{ items: ApiKeyEntry[] }>; setter: (items: ApiKeyEntry[]) => Promise<{ items: ApiKeyEntry[] }> };
+  // Every fixed provider except xai has a dedicated Management API key list
+  // (gemini/claude/codex-key). xAI has none (see routes.js's findXaiEntry
+  // doc comment) -- its card uses `isXai` to route "Add via API key" to a
+  // different modal backed by a shared openai-compatibility entry instead.
+  apiKey?: { label: string; getter: () => Promise<{ items: ApiKeyEntry[] }>; setter: (items: ApiKeyEntry[]) => Promise<{ items: ApiKeyEntry[] }> };
+  isXai?: boolean;
   oauthDisabled?: boolean;
   oauthDisabledReason?: string;
   note?: string;
@@ -37,6 +45,15 @@ const PROVIDER_CARDS: {
     label: "Codex (ChatGPT)",
     description: "Login with your ChatGPT account to use ChatGPT Codex models.",
     apiKey: { label: "Codex API Key", getter: api.getCodexKeys, setter: api.setCodexKeys },
+  },
+  {
+    id: "xai",
+    label: "xAI (Grok)",
+    description: "Login with your SuperGrok / X Premium+ account, or add a raw xAI API key.",
+    isXai: true,
+    note:
+      "xAI login uses a device code, not a browser redirect: after clicking, a page opens where you approve the " +
+      "code shown below (it's usually pre-filled from the link). This can take up to a few minutes to complete.",
   },
 ];
 
@@ -85,10 +102,12 @@ export function Providers() {
   const serverRunning = status?.running ?? false;
   const { data, mutate } = usePolling(api.getAuthFiles, 8000, serverRunning);
   const [loginStates, setLoginStates] = useState<Record<string, LoginState>>({});
+  const [loginCodes, setLoginCodes] = useState<Record<string, string>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [bannedUntil, setBannedUntil] = useState<Record<string, number>>({});
   const [now, setNow] = useState(() => Date.now());
   const [apiKeyModal, setApiKeyModal] = useState<(typeof PROVIDER_CARDS)[number]["apiKey"] | null>(null);
+  const [xaiModalOpen, setXaiModalOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState("antigravity");
   const [customGroups, setCustomGroups] = useState<Record<string, string>>({});
@@ -110,9 +129,10 @@ export function Providers() {
     });
   }
 
-  const geminiKeysQuery = usePolling(PROVIDER_CARDS[0].apiKey.getter, 30000, serverRunning);
-  const claudeKeysQuery = usePolling(PROVIDER_CARDS[1].apiKey.getter, 30000, serverRunning);
-  const codexKeysQuery = usePolling(PROVIDER_CARDS[2].apiKey.getter, 30000, serverRunning);
+  const geminiKeysQuery = usePolling(api.getGeminiKeys, 30000, serverRunning);
+  const claudeKeysQuery = usePolling(api.getClaudeKeys, 30000, serverRunning);
+  const codexKeysQuery = usePolling(api.getCodexKeys, 30000, serverRunning);
+  const xaiKeyQuery = usePolling(api.getXaiKey, 30000, serverRunning);
   const apiKeyQueriesById: Record<string, typeof geminiKeysQuery> = {
     antigravity: geminiKeysQuery,
     claude: claudeKeysQuery,
@@ -121,12 +141,17 @@ export function Providers() {
   const customQuery = usePolling(api.getOpenAiCompat, 30000, serverRunning);
   const customItems = customQuery.data?.items ?? [];
   const customGroupNames = Array.from(new Set(customItems.map((it) => customGroups[it.name] || "Ungrouped"))).filter(
-    (g) => !["antigravity", "claude", "codex"].includes(g)
+    (g) => !FIXED_PROVIDER_IDS.includes(g as FixedProviderId)
   );
   const allGroups = [...PROVIDER_CARDS.map((p) => ({ id: p.id, label: p.label })), ...customGroupNames.map((g) => ({ id: g, label: g }))];
-  const groupOptions = Array.from(new Set(["antigravity", "claude", "codex", ...customGroupNames]));
+  const groupOptions = Array.from(new Set([...FIXED_PROVIDER_IDS, ...customGroupNames]));
 
   function countForGroup(id: string): number {
+    if (id === "xai") {
+      const oauthCount = data?.files?.filter((f) => f.provider === "xai").length ?? 0;
+      const keyCount = xaiKeyQuery.data?.item?.["api-key-entries"]?.length ?? 0;
+      return oauthCount + keyCount;
+    }
     if (id === "antigravity" || id === "claude" || id === "codex") {
       const oauthCount = data?.files?.filter((f) => f.provider === id).length ?? 0;
       const keyCount = apiKeyQueriesById[id]?.data?.items?.length ?? 0;
@@ -220,11 +245,13 @@ export function Providers() {
     });
   }
 
-  async function startLogin(provider: "antigravity" | "claude" | "codex") {
+  async function startLogin(provider: FixedProviderId) {
     if (!serverRunning) return;
     setLoginStates((s) => ({ ...s, [provider]: "waiting" }));
+    setLoginCodes((c) => ({ ...c, [provider]: "" }));
     try {
-      const { url, state } = await api.startLogin(provider);
+      const { url, state, userCode } = await api.startLogin(provider);
+      if (userCode) setLoginCodes((c) => ({ ...c, [provider]: userCode }));
       postOpenExternal(url);
       pollLogin(provider, state);
     } catch (err: any) {
@@ -262,13 +289,130 @@ export function Providers() {
     return () => clearInterval(id);
   }, [bannedUntil, now]);
 
+  // Shared by every fixed provider's OAuth account list (including xAI's --
+  // extracted so the xai branch of renderGroupRows can reuse it instead of
+  // duplicating this block).
+  function renderOAuthAccountRow(f: AuthFileEntry) {
+    return (
+      <div key={f.name} className="cred-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+          <div>
+            <div>{f.email ? <MaskedEmail email={f.email} revealed={revealed} /> : f.name}</div>
+            <div className="cred-row-sub">OAuth · {f.provider}</div>
+          </div>
+          <div className="btn-row" style={{ alignItems: "center" }}>
+            {f.unavailable && (
+              <span className="badge neutral">
+                Quota exceeded{formatNextRetry(f.next_retry_after) ? ` · retry ~${formatNextRetry(f.next_retry_after)}` : ""}
+              </span>
+            )}
+            <span
+              className={`badge ${f.status === "ready" ? "success" : "neutral"}`}
+              title={
+                f.status !== "ready"
+                  ? "Raw status reported by CLIProxyAPI -- can lag behind reality (e.g. still show \"error\" after a resolved quota issue) until CLIProxyAPI restarts."
+                  : undefined
+              }
+            >
+              {f.status}
+            </span>
+            <span className="card-desc">{f.disabled ? "Inactive" : "Active"}</span>
+            <input type="checkbox" className="toggle" checked={!f.disabled} onChange={(e) => toggleActive(f, e.target.checked)} />
+            <button
+              className="btn secondary"
+              disabled={!f.auth_index || resetting[f.name]}
+              title={!f.auth_index ? "No auth_index reported for this credential" : undefined}
+              onClick={() => handleResetQuota(f)}
+            >
+              {resetting[f.name] ? "Resetting..." : "Reset Quota"}
+            </button>
+            <button className="btn secondary" onClick={() => api.deleteAuthFile(f.name).then(() => mutate(undefined, true))}>
+              Remove
+            </button>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span className="card-desc" style={{ minWidth: 40 }}>
+            Prefix
+          </span>
+          <input
+            className="text-input"
+            style={{ width: 140 }}
+            placeholder="none"
+            defaultValue={f.prefix || ""}
+            key={`${f.name}-${f.prefix || ""}`}
+            onBlur={(e) => savePrefix(f, e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+            }}
+            disabled={savingPrefix[f.name]}
+          />
+          <span className="card-desc" title="When set, this account's models get a distinct '<prefix>/<model-id>' id on the Models page, addressable independently from other accounts serving the same bare model id.">
+            {f.prefix ? `→ models appear as "${f.prefix}/<model-id>"` : "optional -- namespaces this account's models"}
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  async function removeXaiKey(index: number) {
+    const entry = xaiKeyQuery.data?.item;
+    if (!entry) return;
+    const nextEntries = (entry["api-key-entries"] || []).filter((_, i) => i !== index);
+    await api.setXaiKey(nextEntries.length ? { ...entry, "api-key-entries": nextEntries } : null);
+    xaiKeyQuery.mutate(undefined, true);
+  }
+
   function renderGroupRows() {
-    const isFixed = selectedGroup === "antigravity" || selectedGroup === "claude" || selectedGroup === "codex";
+    const isFixed = FIXED_PROVIDER_IDS.includes(selectedGroup as FixedProviderId);
     if (isFixed) {
       const oauthAccounts = data?.files?.filter((f) => f.provider === selectedGroup) ?? [];
+
+      // xAI has no dedicated Management API key list -- its "keys" live in one
+      // shared openai-compatibility entry instead (see routes.js's
+      // findXaiEntry), so it needs its own rendering branch rather than the
+      // generic apiKeyQueriesById lookup the other three providers use.
+      if (selectedGroup === "xai") {
+        const xaiEntry = xaiKeyQuery.data?.item;
+        const keyEntries = xaiEntry?.["api-key-entries"] ?? [];
+        const empty = !oauthAccounts.length && !keyEntries.length;
+        return (
+          <>
+            {empty && <p className="card-desc">No credentials in this group yet.</p>}
+            {oauthAccounts.length > 1 && (
+              <div className="btn-row" style={{ justifyContent: "flex-end" }}>
+                <button className="btn secondary" disabled={oauthAccounts.every((f) => !f.disabled)} onClick={() => bulkSetOAuthDisabled(oauthAccounts, false)}>
+                  Enable all
+                </button>
+                <button className="btn secondary" disabled={oauthAccounts.every((f) => !!f.disabled)} onClick={() => bulkSetOAuthDisabled(oauthAccounts, true)}>
+                  Disable all
+                </button>
+              </div>
+            )}
+            {oauthAccounts.map(renderOAuthAccountRow)}
+            {keyEntries.map((k, i) => (
+              <div key={`xai-key-${i}`} className="cred-row">
+                <div>
+                  <div style={{ fontFamily: "var(--vscode-editor-font-family, monospace)" }}>{maskKey(k["api-key"])}</div>
+                  <div className="cred-row-sub">
+                    xAI API Key
+                    {xaiEntry?.models?.length
+                      ? ` · models: ${xaiEntry.models.map((m) => m.alias || m.name).join(", ")}`
+                      : " · no model IDs set -- won't show up on the Models page"}
+                  </div>
+                </div>
+                <button className="btn secondary" onClick={() => removeXaiKey(i)}>
+                  Remove
+                </button>
+              </div>
+            ))}
+          </>
+        );
+      }
+
       const keyQuery = apiKeyQueriesById[selectedGroup];
       const keyItems = keyQuery?.data?.items ?? [];
-      const keyConfig = PROVIDER_CARDS.find((p) => p.id === selectedGroup)!.apiKey;
+      const keyConfig = PROVIDER_CARDS.find((p) => p.id === selectedGroup)!.apiKey!;
       const empty = !oauthAccounts.length && !keyItems.length;
       return (
         <>
@@ -283,66 +427,7 @@ export function Providers() {
               </button>
             </div>
           )}
-          {oauthAccounts.map((f) => (
-            <div key={f.name} className="cred-row" style={{ flexDirection: "column", alignItems: "stretch", gap: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
-                <div>
-                  <div>{f.email ? <MaskedEmail email={f.email} revealed={revealed} /> : f.name}</div>
-                  <div className="cred-row-sub">OAuth · {f.provider}</div>
-                </div>
-                <div className="btn-row" style={{ alignItems: "center" }}>
-                  {f.unavailable && (
-                    <span className="badge neutral">
-                      Quota exceeded{formatNextRetry(f.next_retry_after) ? ` · retry ~${formatNextRetry(f.next_retry_after)}` : ""}
-                    </span>
-                  )}
-                  <span
-                    className={`badge ${f.status === "ready" ? "success" : "neutral"}`}
-                    title={
-                      f.status !== "ready"
-                        ? "Raw status reported by CLIProxyAPI -- can lag behind reality (e.g. still show \"error\" after a resolved quota issue) until CLIProxyAPI restarts."
-                        : undefined
-                    }
-                  >
-                    {f.status}
-                  </span>
-                  <span className="card-desc">{f.disabled ? "Inactive" : "Active"}</span>
-                  <input type="checkbox" className="toggle" checked={!f.disabled} onChange={(e) => toggleActive(f, e.target.checked)} />
-                  <button
-                    className="btn secondary"
-                    disabled={!f.auth_index || resetting[f.name]}
-                    title={!f.auth_index ? "No auth_index reported for this credential" : undefined}
-                    onClick={() => handleResetQuota(f)}
-                  >
-                    {resetting[f.name] ? "Resetting..." : "Reset Quota"}
-                  </button>
-                  <button className="btn secondary" onClick={() => api.deleteAuthFile(f.name).then(() => mutate(undefined, true))}>
-                    Remove
-                  </button>
-                </div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span className="card-desc" style={{ minWidth: 40 }}>
-                  Prefix
-                </span>
-                <input
-                  className="text-input"
-                  style={{ width: 140 }}
-                  placeholder="none"
-                  defaultValue={f.prefix || ""}
-                  key={`${f.name}-${f.prefix || ""}`}
-                  onBlur={(e) => savePrefix(f, e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") (e.target as HTMLInputElement).blur();
-                  }}
-                  disabled={savingPrefix[f.name]}
-                />
-                <span className="card-desc" title="When set, this account's models get a distinct '<prefix>/<model-id>' id on the Models page, addressable independently from other accounts serving the same bare model id.">
-                  {f.prefix ? `→ models appear as "${f.prefix}/<model-id>"` : "optional -- namespaces this account's models"}
-                </span>
-              </div>
-            </div>
-          ))}
+          {oauthAccounts.map(renderOAuthAccountRow)}
           {keyItems.map((entry, i) => (
             <div key={`key-${i}`} className="cred-row">
               <div>
@@ -457,7 +542,11 @@ export function Providers() {
                 )
               )}
               {state === "ok" && <span className="badge success">Logged in</span>}
-              {state === "waiting" && <span className="badge neutral">Waiting for browser...</span>}
+              {state === "waiting" && (
+                <span className="badge neutral">
+                  Waiting for browser...{loginCodes[p.id] ? ` code: ${loginCodes[p.id]}` : ""}
+                </span>
+              )}
               <div className="btn-row" style={{ flexDirection: "column" }}>
                 <button
                   className="btn"
@@ -475,7 +564,12 @@ export function Providers() {
                           ? "Server not running"
                           : "Login via OAuth"}
                 </button>
-                <button className="btn secondary" style={{ width: "100%" }} onClick={() => setApiKeyModal(p.apiKey)} disabled={!serverRunning}>
+                <button
+                  className="btn secondary"
+                  style={{ width: "100%" }}
+                  onClick={() => (p.isXai ? setXaiModalOpen(true) : setApiKeyModal(p.apiKey!))}
+                  disabled={!serverRunning}
+                >
                   Add via API key
                 </button>
               </div>
@@ -532,6 +626,10 @@ export function Providers() {
 
       <Modal open={apiKeyModal !== null} onClose={() => setApiKeyModal(null)}>
         {apiKeyModal && <ApiKeyModalContent label={apiKeyModal.label} getter={apiKeyModal.getter} setter={apiKeyModal.setter} onClose={() => setApiKeyModal(null)} />}
+      </Modal>
+
+      <Modal open={xaiModalOpen} onClose={() => setXaiModalOpen(false)}>
+        <XaiApiKeyModalContent onClose={() => setXaiModalOpen(false)} />
       </Modal>
 
       <Modal open={customModalOpen} onClose={() => setCustomModalOpen(false)}>
@@ -611,6 +709,114 @@ function ApiKeyModalContent({
         <button className="btn" style={{ alignSelf: "flex-start" }} disabled={saving || !apiKey.trim()} onClick={addEntry}>
           Add
         </button>
+      </div>
+    </>
+  );
+}
+
+// xAI has no dedicated Management API key list (see routes.js's findXaiEntry
+// doc comment) -- this reads/writes one shared openai-compatibility entry
+// pinned to api.x.ai instead. Unlike Gemini/Claude/Codex's key modal, model
+// IDs aren't auto-discovered for this path (CLIProxyAPI only knows which
+// models a generic openai-compatibility endpoint serves from what's declared
+// here), so this modal also collects them -- same requirement as the Custom
+// provider modal below, just pre-scoped to xAI's fixed base URL.
+function XaiApiKeyModalContent({ onClose }: { onClose: () => void }) {
+  const { data, mutate, isLoading } = usePolling(api.getXaiKey, 30000);
+  const entry = data?.item ?? null;
+  const keyEntries = entry?.["api-key-entries"] ?? [];
+  const [apiKey, setApiKey] = useState("");
+  const [modelIds, setModelIds] = useState(() => (entry?.models ?? []).map((m) => m.alias || m.name).join(", "));
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setModelIds((entry?.models ?? []).map((m) => m.alias || m.name).join(", "));
+  }, [entry?.models]);
+
+  function parsedModels() {
+    return modelIds
+      .split(",")
+      .map((m) => m.trim())
+      .filter(Boolean)
+      .map((m) => ({ name: m }));
+  }
+
+  async function addEntry() {
+    if (!apiKey.trim()) return;
+    setSaving(true);
+    try {
+      const models = parsedModels();
+      await api.setXaiKey({
+        name: "xai",
+        "base-url": "https://api.x.ai/v1",
+        "api-key-entries": [...keyEntries, { "api-key": apiKey.trim() }],
+        ...(models.length ? { models } : {}),
+      });
+      setApiKey("");
+    } finally {
+      setSaving(false);
+      mutate(undefined, true);
+    }
+  }
+
+  async function removeKey(index: number) {
+    setSaving(true);
+    try {
+      const nextEntries = keyEntries.filter((_, i) => i !== index);
+      await api.setXaiKey(nextEntries.length ? { ...entry!, "api-key-entries": nextEntries } : null);
+    } finally {
+      setSaving(false);
+      mutate(undefined, true);
+    }
+  }
+
+  async function saveModelIds() {
+    if (!keyEntries.length) return;
+    setSaving(true);
+    try {
+      const models = parsedModels();
+      await api.setXaiKey({ ...entry!, name: "xai", "base-url": "https://api.x.ai/v1", ...(models.length ? { models } : { models: [] }) });
+    } finally {
+      setSaving(false);
+      mutate(undefined, true);
+    }
+  }
+
+  return (
+    <>
+      <ModalHeader title="xAI API Key" description={`${keyEntries.length} key${keyEntries.length === 1 ? "" : "s"} configured`} onClose={onClose} />
+      {isLoading && <p className="card-desc">Loading...</p>}
+      {!isLoading && !keyEntries.length && <p className="card-desc">No keys yet.</p>}
+      {keyEntries.map((k, i) => (
+        <div key={i} className="cred-row">
+          <div style={{ fontFamily: "var(--vscode-editor-font-family, monospace)" }}>{maskKey(k["api-key"])}</div>
+          <button className="btn secondary" disabled={saving} onClick={() => removeKey(i)}>
+            Remove
+          </button>
+        </div>
+      ))}
+      <div className="field" style={{ border: "1px dashed var(--vscode-panel-border)", borderRadius: 4, padding: 10, gap: 8 }}>
+        <div className="field">
+          <label className="field-label">API key</label>
+          <input className="text-input" value={apiKey} onChange={(e) => setApiKey(e.target.value)} placeholder="xai-..." />
+        </div>
+        <div className="field">
+          <label className="field-label">Model IDs (comma-separated)</label>
+          <input className="text-input" value={modelIds} onChange={(e) => setModelIds(e.target.value)} placeholder="grok-4.3, grok-4-fast" />
+          <p className="card-desc">
+            Shared across all keys above -- CLIProxyAPI needs this to know which models this endpoint serves; without it they won't show up on the Models page.
+          </p>
+        </div>
+        <div className="btn-row">
+          <button className="btn" disabled={saving || !apiKey.trim()} onClick={addEntry}>
+            Add key
+          </button>
+          {keyEntries.length > 0 && (
+            <button className="btn secondary" disabled={saving} onClick={saveModelIds}>
+              Save model IDs
+            </button>
+          )}
+        </div>
       </div>
     </>
   );

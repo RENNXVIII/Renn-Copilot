@@ -3,11 +3,12 @@ import { api, type ModelEntry } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import { loadCustomGroups } from "../lib/custom-groups";
 
-const PINNED_PROVIDERS = ["antigravity", "claude", "codex"];
+const PINNED_PROVIDERS = ["antigravity", "claude", "codex", "xai"];
 const PROVIDER_LABELS: Record<string, string> = {
   antigravity: "Antigravity",
   claude: "Claude",
   codex: "Codex",
+  xai: "xAI (Grok)",
   other: "Other",
 };
 

@@ -227,6 +227,7 @@ export async function installOrUpdateBinary() {
     const archivePath = path.join(tmpDir, name);
     await downloadToFile(url, archivePath);
 
+    const isArchive = name.endsWith(".zip") || name.endsWith(".tar.gz") || name.endsWith(".tgz");
     if (name.endsWith(".zip")) {
       await withHardTimeout(extractZip(archivePath, { dir: tmpDir }), 60_000, "Extracting archive");
     } else if (name.endsWith(".tar.gz") || name.endsWith(".tgz")) {
@@ -236,10 +237,25 @@ export async function installOrUpdateBinary() {
       await withHardTimeout(copyFileWithRetry(archivePath, binaryPath()), 60_000, "Copying binary into place");
     }
 
-    // Locate the extracted binary (it may be nested in a subfolder).
-    const expectedName = process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
-    const found = await withHardTimeout(findFileRecursive(tmpDir, expectedName), 15_000, "Locating extracted binary");
-    if (found) {
+    // Locate the extracted binary (it may be nested in a subfolder). Only
+    // applies to the archive branches above -- the raw-binary branch already
+    // placed it directly at binaryPath().
+    if (isArchive) {
+      const expectedName = process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
+      const found = await withHardTimeout(findFileRecursive(tmpDir, expectedName), 15_000, "Locating extracted binary");
+      if (!found) {
+        // A missing `found` used to be silently skipped here: the temp dir got
+        // cleaned up and this function returned success anyway, with nothing
+        // ever copied to binaryPath() -- so a first-ever install looked like
+        // it "finished" (after the full download+extract wait) but left no
+        // binary at all, and a later update on top of an existing install
+        // would silently leave the old binary in place while still reporting
+        // success. Surface this as a real, actionable error instead.
+        throw new Error(
+          `Downloaded archive "${name}" didn't contain an expected "${expectedName}" file after extraction -- ` +
+            `the release's internal layout may have changed. Nothing was installed; any previous binary is untouched.`
+        );
+      }
       pushLog("Copying binary into place (can be slow if antivirus is scanning the new file)...");
       await withHardTimeout(copyFileWithRetry(found, binaryPath()), 60_000, "Copying binary into place");
     }
@@ -328,9 +344,21 @@ export function ensureDefaultConfig() {
       "allow-remote": false,
       "secret-key": managementKey,
     },
-    // Required to call CLIProxyAPI's OpenAI-compatible surface (GET /v1/models,
-    // /v1/chat/completions, etc.) -- the Management API key above does NOT work here.
-    "api-keys": [proxyApiKey],
+    // Starts unauthenticated (matches rennCopilot.requireApiKey's own default
+    // of false) rather than baking in `proxyApiKey` as a required key here.
+    // A brand-new config used to always require it, and the extension only
+    // disables that requirement *after* activating (via PUT /server/proxy-auth,
+    // see extension.ts's syncModels) -- on a first-ever install that left a
+    // real race: CLIProxyAPI could spawn, and chatLanguageModels.json could
+    // get written with no key, before that async fix-up's config.yaml write
+    // actually took effect, so the very first chat request 401'd. A later
+    // "Reload Window" always looked like it fixed it because by then
+    // config.yaml already had api-keys: [] persisted from the first session's
+    // fix-up, so the race no longer existed on the next launch. Starting
+    // empty here removes the race entirely for the common (default) case;
+    // rennCopilot.requireApiKey: true still adds `proxyApiKey` back via that
+    // same PUT /server/proxy-auth call shortly after activation.
+    "api-keys": [],
   };
   fs.writeFileSync(configPath(), yaml.dump(defaultConfig), "utf8");
   settings.managementKey = managementKey;
@@ -413,10 +441,24 @@ export function ensureProxyApiKey() {
 
   const ownKeys = loadOwnKeys();
   const proxyApiKey = ownKeys.proxyApiKey || settings.proxyApiKey || crypto.randomBytes(24).toString("hex");
-  const patchedText = patchTopLevelList(fs.readFileSync(configPath(), "utf8"), "api-keys", [proxyApiKey]);
-  fs.writeFileSync(configPath(), patchedText, "utf8");
   settings.proxyApiKey = proxyApiKey;
   saveOwnKeys({ proxyApiKey });
+
+  // A *present but empty* api-keys: [] is a deliberate choice -- the fresh-
+  // install default (see ensureDefaultConfig) or a user-toggled
+  // rennCopilot.requireApiKey: false via setProxyAuthEnabled -- not a config
+  // that predates this feature. Writing a key back in here would silently
+  // re-require auth behind the extension's back (this function runs on every
+  // startServer() call), reintroducing the exact startup race this default
+  // was changed to avoid. Only backfill into config.yaml when the key is
+  // genuinely *missing* (an old CLIProxyAPI config from before this feature
+  // existed) -- we still cache a key in memory either way, so
+  // /models/export has one ready and a later requireApiKey: true can add it
+  // back via setProxyAuthEnabled without generating a new one.
+  if (doc["api-keys"] !== undefined) return proxyApiKey;
+
+  const patchedText = patchTopLevelList(fs.readFileSync(configPath(), "utf8"), "api-keys", [proxyApiKey]);
+  fs.writeFileSync(configPath(), patchedText, "utf8");
   pushLog(`Backfilled a proxy API key into config.yaml (restart CLIProxyAPI to apply).`);
   return proxyApiKey;
 }
@@ -524,4 +566,110 @@ export async function stopServer() {
 export async function restartServer() {
   await stopServer();
   return startServer();
+}
+
+// --- xAI (Grok) OAuth login -------------------------------------------------
+// CLIProxyAPI has no Management API endpoint for xAI OAuth (confirmed against
+// help.router-for.me/management/api.html -- only antigravity/claude/codex get
+// a GET .../auth-url + GET /get-auth-status pair). xAI login only exists as a
+// CLI flag ("-xai-login"), and it's a device-code flow, not the redirect-
+// callback flow the other three providers use: run standalone, it prints a
+// URL + user code to stdout, polls x.ai's token endpoint itself, and (per
+// `-help`'s own description, confirmed live up to the "waiting" stage without
+// completing a real grant) exits once authorized. It doesn't bind a local
+// callback port, so it's safe to run this as a second, short-lived process
+// alongside the already-running persistent server -- they only share the
+// auth-dir on disk, not a network port.
+const xaiLogins = new Map(); // state -> { status: "wait" | "ok" | "error", error?: string }
+const XAI_LOGIN_TIMEOUT_MS = 6 * 60 * 1000; // a bit past the dashboard's own 5-minute poll window
+const XAI_LOGIN_URL_RE = /(https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=\S+)/;
+const XAI_LOGIN_CODE_RE = /enter this code:\s*(\S+)/i;
+
+/**
+ * Spawns a standalone `-xai-login` process and resolves with the device-flow
+ * URL (+ user code) as soon as it's printed, so routes.js can hand it back to
+ * the dashboard the same way it does for the Management-API-driven providers'
+ * auth URL. The process keeps running in the background afterward, polling
+ * x.ai for authorization -- its outcome is tracked in `xaiLogins` under the
+ * same `state` and surfaced via getXaiLoginStatus() for the dashboard's
+ * existing poll loop.
+ */
+export function startXaiLogin() {
+  return new Promise((resolve, reject) => {
+    const state = crypto.randomUUID();
+    const child = spawn(binaryPath(), ["-config", configPath(), "-xai-login", "-no-browser"], {
+      cwd: settings.cliproxyHome,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    const entry = { status: "wait" };
+    xaiLogins.set(state, entry);
+
+    let buffered = "";
+    let urlResolved = false;
+
+    function onOutput(text) {
+      buffered += text;
+      if (urlResolved) return;
+      const urlMatch = buffered.match(XAI_LOGIN_URL_RE);
+      if (urlMatch) {
+        urlResolved = true;
+        const codeMatch = buffered.match(XAI_LOGIN_CODE_RE);
+        resolve({ url: urlMatch[1], userCode: codeMatch?.[1], state });
+      }
+    }
+
+    child.stdout.on("data", (chunk) => {
+      const text = chunk.toString();
+      pushLog(`[xai-login] ${text.trim()}`);
+      onOutput(text);
+    });
+    child.stderr.on("data", (chunk) => {
+      const text = chunk.toString();
+      pushLog(`[xai-login stderr] ${text.trim()}`);
+      onOutput(text);
+    });
+
+    child.on("exit", (code) => {
+      clearTimeout(safetyTimer);
+      if (code === 0) {
+        entry.status = "ok";
+        // The standalone login process wrote the new auth file to disk, but
+        // the already-running server only reads auth-dir at startup -- it
+        // won't see the new xAI credential in GET /auth-files until it
+        // restarts. Restart automatically so this behaves like every other
+        // provider's login from the dashboard's point of view.
+        if (isRunning()) {
+          restartServer().catch((err) => pushLog(`xAI login: restart after login failed: ${err.message}`));
+        }
+      } else {
+        entry.status = "error";
+        entry.error = `xAI login exited with code ${code}` + (buffered.trim() ? `: ${buffered.trim().split("\n").pop()}` : "");
+      }
+      if (!urlResolved) {
+        urlResolved = true;
+        reject(new Error(entry.status === "error" ? entry.error : "xAI login process ended before printing a login URL"));
+      }
+      // Keep the final status around briefly so a last in-flight poll can see it.
+      setTimeout(() => xaiLogins.delete(state), 5 * 60 * 1000);
+    });
+
+    const safetyTimer = setTimeout(() => {
+      if (entry.status === "wait") {
+        entry.status = "error";
+        entry.error = "xAI login timed out waiting for authorization";
+        try {
+          child.kill();
+        } catch {
+          // already exited
+        }
+      }
+    }, XAI_LOGIN_TIMEOUT_MS);
+  });
+}
+
+export function getXaiLoginStatus(state) {
+  const entry = xaiLogins.get(state);
+  if (!entry) return { status: "error", error: "Unknown or expired xAI login attempt" };
+  return { status: entry.status, error: entry.error };
 }

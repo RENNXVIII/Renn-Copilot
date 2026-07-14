@@ -60,9 +60,11 @@ function guessProvider(id, loggedInProviders = []) {
     ? "antigravity" // Gemini is Antigravity-only today
     : lower.includes("claude")
       ? "claude"
-      : lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)
-        ? "codex"
-        : "other";
+      : lower.includes("grok")
+        ? "xai"
+        : lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)
+          ? "codex"
+          : "other";
 
   // Only trust the name-based guess if that provider is actually logged in
   // right now -- otherwise (e.g. a claude-named id naively guessed as
