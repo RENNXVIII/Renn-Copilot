@@ -20,6 +20,7 @@ backend/.env.example
 backend/.gitignore
 backend/_probe.txt
 backend/*.log
+backend/test/**
 scripts/**
 # Standalone diagnostic proxy documented in README.md -- run manually with
 # `node logging-proxy.js`, not something the packaged extension needs.

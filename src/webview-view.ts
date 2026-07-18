@@ -28,7 +28,7 @@ export class RennSidebarViewProvider implements vscode.WebviewViewProvider {
           openDashboardPanel(this.context, message.page);
           break;
         case "syncModels":
-          void vscode.commands.executeCommand("rennCopilot.syncModels");
+          void vscode.commands.executeCommand("rennCopilot.syncModelsInternal");
           break;
         case "copyApiKey":
           void vscode.commands.executeCommand("rennCopilot.copyApiKey");

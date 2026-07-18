@@ -1,4 +1,3 @@
-import fetch from "node-fetch";
 import { proxyBaseUrl } from "./settings.js";
 import { loadProxyApiKeyFromConfig } from "./cliproxy-manager.js";
 
@@ -35,11 +34,37 @@ export async function listLiveModelIds() {
   return Array.isArray(data?.data) ? data.data.map((m) => m.id).filter(Boolean) : [];
 }
 
-// 1x1 transparent PNG -- smallest possible payload that's still a real image,
-// so the probe below costs as little quota/tokens as it can while still
-// exercising whatever multimodal path the backend actually has.
+// 16x16 solid red PNG. Unlike a transparent pixel, this gives the model a
+// visual fact it must inspect, allowing us to catch endpoints that accept an
+// image_url payload but silently discard it before invoking a text-only model.
 const PROBE_IMAGE_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+  "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII=";
+
+export function classifyVisionProbeResponse({ ok, status, data, text = "" }) {
+  const message = String(data?.error?.message || data?.error || text || "").slice(0, 300);
+  if (!ok) {
+    const looksLikeCapabilityRejection =
+      /(?:does not|doesn't|not|no longer) support(?:ed)? (?:image|vision|multimodal)|(?:image|vision|multimodal|image_url)(?: input| content)? (?:is |are )?(?:not supported|unsupported)|unsupported (?:image|vision|multimodal|image_url|content type)|(?:image|vision|multimodal|image_url) content is unsupported/i.test(message);
+    if (looksLikeCapabilityRejection && ![401, 403, 408, 409, 429].includes(status) && status < 500) {
+      return { vision: false, source: "probe", note: message };
+    }
+    return { vision: "unknown", source: "probe", note: `Vision probe was inconclusive (HTTP ${status}): ${message}` };
+  }
+
+  const content = data?.choices?.[0]?.message?.content;
+  const answer = typeof content === "string"
+    ? content
+    : Array.isArray(content)
+      ? content.map((part) => part?.text || "").join(" ")
+      : "";
+
+  if (/\bred\b/i.test(answer)) return { vision: true, source: "probe" };
+  return {
+    vision: "unknown",
+    source: "probe",
+    note: "The endpoint accepted image content, but the response did not identify the red test image.",
+  };
+}
 
 /**
  * Sends one real chat-completion request containing a test image to find out
@@ -50,7 +75,8 @@ const PROBE_IMAGE_BASE64 =
  * per id and caching the result -- this function itself doesn't cache
  * anything.
  *
- * Returns { vision: true } on a normal success response.
+ * Returns { vision: true, source: "probe" } only when the response correctly
+ * identifies the visual fact in the image.
  * Returns { vision: false, note } when the failure looks like the model/
  * backend explicitly rejecting image content (message mentions image/vision/
  * modality/multimodal).
@@ -63,25 +89,40 @@ export async function probeVisionSupport(modelId) {
   const key = loadProxyApiKeyFromConfig();
   if (!key) throw new Error("No proxy API key configured yet (start the server once to generate one).");
 
-  const res = await fetch(`${proxyBaseUrl()}/v1/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model: modelId,
-      max_tokens: 8,
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "text", text: "Reply with just the word 'ok' if you received this message." },
-            { type: "image_url", image_url: { url: `data:image/png;base64,${PROBE_IMAGE_BASE64}` } },
-          ],
-        },
-      ],
-    }),
-  });
-
-  const text = await res.text();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30_000);
+  let res;
+  let text;
+  try {
+    res = await fetch(`${proxyBaseUrl()}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: modelId,
+        max_tokens: 16,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "What is the dominant color of this image? Reply with one lowercase color word only." },
+              { type: "image_url", image_url: { url: `data:image/png;base64,${PROBE_IMAGE_BASE64}` } },
+            ],
+          },
+        ],
+      }),
+      signal: controller.signal,
+    });
+    text = await res.text();
+  } catch (err) {
+    if (err.name === "AbortError") {
+      const timeoutError = new Error(`Vision probe for "${modelId}" timed out after 30000ms.`);
+      timeoutError.inconclusive = true;
+      throw timeoutError;
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
   let data;
   try {
     data = text ? JSON.parse(text) : {};
@@ -91,13 +132,10 @@ export async function probeVisionSupport(modelId) {
     throw err;
   }
 
-  if (res.ok) return { vision: true };
+  const result = classifyVisionProbeResponse({ ok: res.ok, status: res.status, data, text });
+  if (result.vision !== "unknown") return result;
 
-  const message = String(data?.error?.message || data?.error || text || "").slice(0, 300);
-  const looksLikeCapabilityRejection = /image|vision|modalit|multimodal|unsupported content/i.test(message);
-  if (looksLikeCapabilityRejection) return { vision: false, note: message };
-
-  const err = new Error(`Vision probe for "${modelId}" was inconclusive (HTTP ${res.status}): ${message}`);
+  const err = new Error(result.note);
   err.inconclusive = true;
   throw err;
 }

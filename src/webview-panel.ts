@@ -35,6 +35,9 @@ export function openDashboardPanel(context: vscode.ExtensionContext, initialPage
     if (message?.command === "openExternal" && typeof message.url === "string") {
       void vscode.env.openExternal(vscode.Uri.parse(message.url));
     }
+    if (message?.command === "syncModels") {
+      void vscode.commands.executeCommand("rennCopilot.syncModelsInternal");
+    }
   });
 
   currentPanel.onDidDispose(

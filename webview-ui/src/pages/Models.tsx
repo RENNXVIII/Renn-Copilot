@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { api, type ModelEntry } from "../api/client";
+import { api, type ModelCapabilities, type ModelEntry } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import { loadCustomGroups } from "../lib/custom-groups";
+import { postSyncModels } from "../vscodeApi";
 
 const PINNED_PROVIDERS = ["antigravity", "claude", "codex", "xai"];
 const PROVIDER_LABELS: Record<string, string> = {
@@ -26,6 +27,7 @@ export function Models() {
   const [activeTab, setActiveTab] = useState("all");
   const [query, setQuery] = useState("");
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
+  const [overriding, setOverriding] = useState<Record<string, boolean>>({});
   // Custom-provider grouping is set on the Providers page and stored in
   // localStorage (never sent to the backend) -- read it here too so a model
   // served by e.g. a "tokenrouter" custom provider shows under that label.
@@ -44,17 +46,9 @@ export function Models() {
   async function verifyModel(model: ModelEntry) {
     setVerifying((v) => ({ ...v, [model.id]: true }));
     try {
-      const result = await api.verifyVision(model.id);
-      mutate(
-        (current) =>
-          current && {
-            ...current,
-            models: current.models.map((m) =>
-              m.id === model.id ? { ...m, capabilities: { vision: result.vision, note: result.note, checkedAt: Date.now() } } : m
-            ),
-          },
-        false
-      );
+      await api.verifyVision(model.id);
+      await mutate(undefined, true);
+      postSyncModels();
     } catch (err) {
       mutate(
         (current) =>
@@ -66,6 +60,36 @@ export function Models() {
       );
     } finally {
       setVerifying((v) => ({ ...v, [model.id]: false }));
+    }
+  }
+
+  async function setVisionOverride(model: ModelEntry, value: string) {
+    if (overriding[model.id]) return;
+    const vision = value === "auto" ? "auto" : value === "vision";
+    setOverriding((current) => ({ ...current, [model.id]: true }));
+    try {
+      const result = await api.setVisionOverride(model.id, vision);
+      mutate(
+        (current) =>
+          current && {
+            ...current,
+            models: current.models.map((m) => (m.id === model.id ? { ...m, capabilities: result.capabilities } : m)),
+          },
+        false
+      );
+      postSyncModels();
+    } catch (err) {
+      mutate(
+        (current) =>
+          current && {
+            ...current,
+            models: current.models.map((m) => (m.id === model.id ? { ...m, capabilities: { ...m.capabilities, note: (err as Error).message } } : m)),
+          },
+        false
+      );
+    } finally {
+      setOverriding((current) => ({ ...current, [model.id]: false }));
+      mutate(undefined, true);
     }
   }
 
@@ -82,6 +106,7 @@ export function Models() {
   const grouped = groupBy(visibleModels, (m) => m.provider);
 
   async function applyEnabledIds(nextIds: string[]) {
+    if (saving) return;
     const nextIdSet = new Set(nextIds);
     mutate(
       {
@@ -94,6 +119,7 @@ export function Models() {
     setSaving(true);
     try {
       await api.setEnabledModels(nextIds);
+      postSyncModels();
     } finally {
       setSaving(false);
       mutate(undefined, true);
@@ -193,8 +219,14 @@ export function Models() {
                     </div>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                    <CapabilityBadge capabilities={m.capabilities} verifying={!!verifying[m.id]} onRecheck={() => verifyModel(m)} />
-                    <input type="checkbox" className="toggle" checked={m.enabled} onChange={(e) => toggle(m, e.target.checked)} />
+                    <CapabilityBadge
+                      capabilities={m.capabilities}
+                      verifying={!!verifying[m.id]}
+                      overriding={!!overriding[m.id]}
+                      onRecheck={() => verifyModel(m)}
+                      onOverride={(value) => setVisionOverride(m, value)}
+                    />
+                    <input type="checkbox" className="toggle" checked={m.enabled} disabled={saving} onChange={(e) => toggle(m, e.target.checked)} />
                   </div>
                 </div>
               ))}
@@ -214,32 +246,52 @@ export function Models() {
 function CapabilityBadge({
   capabilities,
   verifying,
+  overriding,
   onRecheck,
+  onOverride,
 }: {
-  capabilities: { vision: boolean | "unknown"; note?: string };
+  capabilities: ModelCapabilities;
   verifying: boolean;
+  overriding: boolean;
   onRecheck: () => void;
+  onOverride: (value: string) => void;
 }) {
-  const { vision, note } = capabilities;
+  const { vision, source, note, checkedAt } = capabilities;
+  const sourceLabel =
+    source === "manual" ? "Manual" : source === "probe" ? "Verified" : source === "catalog" ? "Catalog" : source === "provider-metadata" ? "Provider" : "Unknown";
+  const checkedLabel = checkedAt ? ` · checked ${new Date(checkedAt).toLocaleString()}` : "";
+  const title = `${note || sourceLabel}${checkedLabel}`;
   const badge =
     vision === true ? (
-      <span className="badge success" title={note}>
-        Vision
+      <span className="badge success" title={title}>
+        Vision · {sourceLabel}
       </span>
     ) : vision === false ? (
-      <span className="badge error" title={note}>
-        No vision
+      <span className="badge error" title={title}>
+        No vision · {sourceLabel}
       </span>
     ) : (
-      <span className="badge neutral" title={note || "Not verified yet"}>
-        Unverified
+      <span className="badge neutral" title={title}>
+        Vision unknown
       </span>
     );
 
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+    <div className="capability-controls">
       {badge}
-      <button className="icon-recheck" title="Re-check vision support (sends one real test request)" disabled={verifying} onClick={onRecheck}>
+      <select
+        className="capability-select"
+        aria-label="Vision capability mode"
+        title="Auto uses catalog metadata or a verified probe. Manual choices override both."
+        value={source === "manual" ? (vision ? "vision" : "no-vision") : "auto"}
+        disabled={verifying || overriding}
+        onChange={(event) => onOverride(event.target.value)}
+      >
+        <option value="auto">Auto</option>
+        <option value="vision">Vision</option>
+        <option value="no-vision">No vision</option>
+      </select>
+      <button className="icon-recheck" title="Verify vision support (sends one real test request)" disabled={verifying || overriding} onClick={onRecheck}>
         {verifying ? "⟳" : "↻"}
       </button>
     </div>

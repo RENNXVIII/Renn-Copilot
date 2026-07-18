@@ -9,20 +9,61 @@
  */
 export const MODEL_CATALOG = [
   // --- Antigravity (Google OAuth) ---------------------------------------
-  { id: "antigravity/claude-sonnet-4.5", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 (via Antigravity)", thinking: false },
-  { id: "antigravity/claude-sonnet-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 Thinking (via Antigravity)", thinking: true },
-  { id: "antigravity/claude-opus-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Opus 4.5 Thinking (via Antigravity)", thinking: true },
-  { id: "antigravity/gemini-3-pro-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Pro (Preview, via Antigravity)", thinking: false },
-  { id: "antigravity/gemini-3-flash-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Flash (Preview, via Antigravity)", thinking: false },
-  { id: "antigravity/gemini-2.5-flash", provider: "antigravity", family: "gemini", label: "Gemini 2.5 Flash (via Antigravity)", thinking: false },
+  { id: "antigravity/claude-sonnet-4.5", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 (via Antigravity)", thinking: false, vision: true },
+  { id: "antigravity/claude-sonnet-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 Thinking (via Antigravity)", thinking: true, vision: true },
+  { id: "antigravity/claude-opus-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Opus 4.5 Thinking (via Antigravity)", thinking: true, vision: true },
+  { id: "antigravity/gemini-3-pro-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Pro (Preview, via Antigravity)", thinking: false, vision: true },
+  { id: "antigravity/gemini-3-flash-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Flash (Preview, via Antigravity)", thinking: false, vision: true },
+  { id: "antigravity/gemini-2.5-flash", provider: "antigravity", family: "gemini", label: "Gemini 2.5 Flash (via Antigravity)", thinking: false, vision: true },
 
   // --- Claude Code (Anthropic OAuth / Claude web) -----------------------
-  { id: "claude/claude-sonnet-4.5", provider: "claude", family: "claude", label: "Claude Sonnet 4.5 (Claude Code login)", thinking: false },
-  { id: "claude/claude-opus-4.5", provider: "claude", family: "claude", label: "Claude Opus 4.5 (Claude Code login)", thinking: false },
+  { id: "claude/claude-sonnet-4.5", provider: "claude", family: "claude", label: "Claude Sonnet 4.5 (Claude Code login)", thinking: false, vision: true },
+  { id: "claude/claude-opus-4.5", provider: "claude", family: "claude", label: "Claude Opus 4.5 (Claude Code login)", thinking: false, vision: true },
 
   // --- Codex (ChatGPT OAuth) ---------------------------------------------
-  { id: "codex/gpt-5.1", provider: "codex", family: "gpt", label: "GPT-5.1 (Codex login)", thinking: false },
+  { id: "codex/gpt-5.1", provider: "codex", family: "gpt", label: "GPT-5.1 (Codex login)", thinking: false, vision: true },
 ];
+
+export function modelCapabilityKey(model) {
+  return `${model.provider}::${model.id}`;
+}
+
+export function resolveVisionCapability(model, storedCapability) {
+  if (typeof storedCapability?.override === "boolean") {
+    return {
+      vision: storedCapability.override,
+      source: "manual",
+      checkedAt: storedCapability.overrideAt,
+    };
+  }
+  if (storedCapability?.probe) {
+    return storedCapability.probe;
+  }
+  if (storedCapability?.source === "manual" && typeof storedCapability.vision === "boolean") {
+    return storedCapability;
+  }
+  if (storedCapability && (typeof storedCapability.vision === "boolean" || storedCapability.vision === "unknown")) {
+    return storedCapability;
+  }
+  if (typeof model.vision === "boolean") {
+    return { vision: model.vision, source: "catalog" };
+  }
+  return { vision: "unknown", source: "unknown" };
+}
+
+export function migrateLegacyVisionCapability(legacy) {
+  if (!legacy || typeof legacy !== "object") return undefined;
+  if (typeof legacy.override === "boolean" || legacy.probe) return legacy;
+  if (legacy.source === "manual" && typeof legacy.vision === "boolean") {
+    return { override: legacy.vision, overrideAt: legacy.checkedAt };
+  }
+  return {
+    probe: {
+      ...legacy,
+      source: legacy.source || "probe",
+    },
+  };
+}
 
 /**
  * CLIProxyAPI's /v1/models doesn't namespace ids by login provider -- it
@@ -166,6 +207,20 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
   const nextMemory = { ...memory };
 
   const models = liveIds.map((id) => {
+    const customProvider = customProviderById.get(id);
+    if (customProvider) {
+      return {
+        id,
+        provider: customProvider,
+        family: customProvider,
+        label: `${id} (via ${customProvider})`,
+        thinking: /thinking/i.test(id),
+      };
+    }
+
+    const known = byId.get(id);
+    if (known) return known;
+
     const slash = id.indexOf("/");
     if (slash > 0) {
       const prefix = id.slice(0, slash);
@@ -182,20 +237,6 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
       }
     }
 
-    const customProvider = customProviderById.get(id);
-    if (customProvider) {
-      return {
-        id,
-        provider: customProvider,
-        family: customProvider,
-        label: `${id} (via ${customProvider})`,
-        thinking: /thinking/i.test(id),
-      };
-    }
-
-    const known = byId.get(id);
-    if (known) return known;
-
     const provider = resolveProvider(id, loggedInProviders, memory);
     if (loggedInProviders.length === 1) nextMemory[id] = provider;
     return {
@@ -211,6 +252,37 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
 }
 
 /**
+ * Keeps explicitly enabled models exportable even when CLIProxyAPI's live
+ * model list is temporarily incomplete (for example during startup or while
+ * an account is reconnecting). The live catalog remains authoritative for
+ * metadata; an enabled id missing from it gets a conservative fallback entry
+ * instead of disappearing from VS Code's provider group.
+ */
+export function mergeEnabledModels(catalog = [], enabledModelIds = [], providerMemory = {}) {
+  const modelsById = new Map(catalog.map((model) => [model.id, model]));
+  const models = [];
+
+  for (const id of enabledModelIds) {
+    const known = modelsById.get(id);
+    if (known) {
+      models.push(known);
+      continue;
+    }
+
+    const provider = providerMemory[id] || "other";
+    models.push({
+      id,
+      provider,
+      family: provider,
+      label: id,
+      thinking: /thinking/i.test(id),
+    });
+  }
+
+  return models;
+}
+
+/**
  * Builds the entry shape expected by VS Code's Custom Endpoint chat model
  * provider (written verbatim into chatLanguageModels.json by the extension).
  *
@@ -220,15 +292,10 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
  * content to a model, regardless of what the underlying model can actually
  * do.
  *
- * It's now driven by `model.capabilities.vision` when we actually know the
- * answer (routes.js's ensureVisionProbed()/the manual verify-vision endpoint
- * fill this in by sending a real test image through CLIProxyAPI -- see
- * proxy-client.js's probeVisionSupport). Until a model has been probed (or
- * the probe came back inconclusive -- quota/auth issues, not a capability
- * rejection), we keep defaulting to `true`: every model currently in
- * MODEL_CATALOG natively supports image input, and a wrong `true` surfaces as
- * a clear request error when an image is actually sent, while a wrong
- * `false` would silently disable attachments with no error at all.
+ * It's driven by the resolved capability assembled in routes.js. Unknown is
+ * deliberately exported as false: VS Code should only offer image attachment
+ * UI after a curated catalog entry, successful probe, or manual override has
+ * positively established support.
  */
 export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl }) {
   const verifiedVision = model.capabilities?.vision;
@@ -245,7 +312,7 @@ export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl }) {
     name: model.label,
     url,
     toolCalling: true,
-    vision: verifiedVision === false ? false : true,
+    vision: verifiedVision === true,
     maxInputTokens: model.thinking ? 32000 : 128000,
     maxOutputTokens: model.thinking ? 2048 : 4096,
   };

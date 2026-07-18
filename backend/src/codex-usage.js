@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import fetch from "node-fetch";
 
 // ChatGPT's own (undocumented, reverse-engineered) rate-limit check --
 // costs no model quota, but the URL/shape could change without notice since

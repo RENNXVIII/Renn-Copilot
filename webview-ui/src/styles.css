@@ -302,6 +302,24 @@ button.btn:disabled {
   color: var(--vscode-descriptionForeground);
 }
 
+.capability-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.capability-select {
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  border-radius: 3px;
+  padding: 2px 4px;
+  font: inherit;
+  font-size: 0.78em;
+}
+
 .toggle {
   appearance: none;
   width: 32px;

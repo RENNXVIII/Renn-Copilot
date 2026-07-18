@@ -90,6 +90,31 @@ open as the workspace) while iterating.
 4. On Models, toggle which models should be exposed to Copilot Chat.
 5. Reload VS Code (models sync on startup by default, or run "Renn Copilot: Sync Models" manually) — whenever the synced model list actually changes, the API key is copied to your clipboard automatically. Open Copilot Chat's model picker → "Manage Models..." and click the eye icon next to the new entries to enable them; when VS Code prompts for the API key, just paste (Ctrl+V / Cmd+V) and press Enter.
 
+## Vision capability detection
+
+Renn Copilot does not maintain a supposedly complete global list of vision
+models. Such lists become stale quickly and cannot reliably describe arbitrary
+OpenAI-compatible custom providers. It instead resolves image-input support in
+this order:
+
+1. A per-model **Vision / No vision** manual override.
+2. A successful live verification request that asks the model to identify a
+  visual property of a small test image.
+3. Curated metadata for the small set of built-in models known by this project.
+4. **Unknown** for every other model.
+
+The Models page polls model availability without sending chat requests. A live
+vision verification is sent only when you click the re-check button or enable a
+model whose support is still unknown. It consumes a small amount of real
+provider quota. Authentication, rate-limit, quota, timeout, and upstream errors
+remain **Unknown** rather than being misclassified as **No vision**.
+
+For a custom provider, leave the selector on **Auto** to use live verification,
+or choose **Vision** / **No vision** when the provider's documentation gives a
+definitive answer. Models still marked Unknown are exported to VS Code with
+`vision: false`; image attachments are enabled only after positive evidence or
+an explicit override.
+
 ## Troubleshooting
 
 - **Logs page shows nothing for the "CLIProxyAPI" tab, with `Management API GET /logs

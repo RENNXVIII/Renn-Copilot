@@ -35,8 +35,20 @@ export function ensureDirs() {
 }
 
 export function binaryPath() {
-  const exe = process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api";
-  return path.join(settings.cliproxyHome, exe);
+  const preferred = path.join(
+    settings.cliproxyHome,
+    process.platform === "win32" ? "cli-proxy-api.exe" : "cli-proxy-api"
+  );
+  if (fs.existsSync(preferred)) return preferred;
+
+  // Older/manual Windows installs may have been unpacked without the .exe
+  // suffix. Accept that layout too so the Overview and server lifecycle agree
+  // with what is actually present on disk.
+  if (process.platform === "win32") {
+    const legacy = path.join(settings.cliproxyHome, "cli-proxy-api");
+    if (fs.existsSync(legacy)) return legacy;
+  }
+  return preferred;
 }
 
 export function configPath() {

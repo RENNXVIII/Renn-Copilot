@@ -1,4 +1,3 @@
-import fetch from "node-fetch";
 import { settings, managementBaseUrl } from "./settings.js";
 import { loadManagementKeyFromConfig } from "./cliproxy-manager.js";
 

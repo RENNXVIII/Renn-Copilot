@@ -1,4 +1,4 @@
-import fetch from "node-fetch";
+import { Readable } from "node:stream";
 import { proxyBaseUrl } from "./settings.js";
 
 // Anthropic hard-rejects non-default top_p/temperature/top_k on Claude
@@ -20,6 +20,7 @@ export async function proxyChatCompletions(req, res) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
+      "Accept-Encoding": "identity",
       // Pass through whatever Authorization the client sent verbatim --
       // this proxy doesn't own auth, CLIProxyAPI's own proxy-auth setting
       // (see cliproxy-manager.js's setProxyAuthEnabled) still applies.
@@ -33,7 +34,7 @@ export async function proxyChatCompletions(req, res) {
     const lower = key.toLowerCase();
     // Node/Express recomputes these for its own response -- forwarding
     // CLIProxyAPI's original values here would corrupt the stream.
-    if (lower === "content-encoding" || lower === "transfer-encoding" || lower === "connection") return;
+    if (lower === "content-length" || lower === "content-encoding" || lower === "transfer-encoding" || lower === "connection") return;
     res.setHeader(key, value);
   });
 
@@ -42,6 +43,8 @@ export async function proxyChatCompletions(req, res) {
     return;
   }
 
+  const upstreamStream = Readable.fromWeb(upstream.body);
+
   // A mid-stream error on the upstream body (CLIProxyAPI dropping the
   // connection, a network blip during a long Claude response) would
   // otherwise be an unhandled stream 'error' event -- which crashes the
@@ -49,10 +52,10 @@ export async function proxyChatCompletions(req, res) {
   // down cleanly instead. Also stop pulling from upstream if the client
   // (VS Code) disconnects first, so an abandoned request doesn't keep a
   // CLIProxyAPI stream open.
-  upstream.body.on("error", (err) => {
+  upstreamStream.on("error", (err) => {
     console.error(`Claude proxy stream error: ${err.message}`);
     res.destroy(err);
   });
-  res.on("close", () => upstream.body.destroy());
-  upstream.body.pipe(res);
+  res.on("close", () => upstreamStream.destroy());
+  upstreamStream.pipe(res);
 }

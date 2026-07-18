@@ -20,16 +20,11 @@ const defaultState = {
   // doesn't re-misattribute ids we already know the real answer for.
   // See model-catalog.js for the full rationale.
   modelProviderMemory: {},
-  // Verified (not guessed) per-model capability results, keyed by model id.
-  // Populated by routes.js's ensureVisionProbed()/the manual verify-vision
-  // endpoint, which actually sends a tiny test image through CLIProxyAPI
-  // rather than assuming every model supports it -- a real request that
-  // costs real tokens/credit against a live account. Each entry looks like
-  // { vision: true | false | "unknown", note?: string, checkedAt: number },
-  // and once an id has ANY entry here (even an inconclusive "unknown" one)
-  // it is never auto-probed again, no matter how long it's been -- only the
-  // dashboard's manual "Re-check" action re-probes an already-checked id, as
-  // a deliberate user-initiated request rather than an automatic retry.
+  // Per-model capability evidence, keyed by "<provider>::<model-id>" so two
+  // providers exposing the same id never share a result. Entries include a
+  // source ("probe" or "manual"), checkedAt, and optional note. Curated
+  // catalog evidence is resolved at runtime and is not copied into state.
+  // Legacy model-id-only keys are migrated lazily when that model is listed.
   modelCapabilities: {},
 };
 
@@ -46,6 +41,13 @@ export function readState() {
 export function writeState(partial) {
   const next = { ...readState(), ...partial };
   ensureDirs();
-  fs.writeFileSync(statePath(), JSON.stringify(next, null, 2), "utf8");
+  const target = statePath();
+  const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(next, null, 2), "utf8");
+    fs.renameSync(temporary, target);
+  } finally {
+    if (fs.existsSync(temporary)) fs.rmSync(temporary, { force: true });
+  }
   return next;
 }

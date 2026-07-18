@@ -107,6 +107,7 @@ let healthTimer: ReturnType<typeof setInterval> | undefined;
 let healthFastRetryTimer: ReturnType<typeof setTimeout> | undefined;
 let healthFastRetriesLeft = 0;
 let lastHealthAccounts: HealthEntry[] = [];
+let syncQueue: Promise<void> = Promise.resolve();
 
 // While the backend/CLIProxyAPI are still spinning up (right after
 // activation, or right after a manual/auto "start"), a health check can fail
@@ -144,6 +145,9 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand("rennCopilot.syncModels", () => syncModels(true))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.syncModelsInternal", () => syncModels(false))
   );
   context.subscriptions.push(
     vscode.commands.registerCommand("rennCopilot.copyApiKey", copyApiKey)
@@ -370,15 +374,23 @@ async function copyApiKey() {
       return;
     }
     await vscode.env.clipboard.writeText(remote.apiKey);
-    void vscode.window.showInformationMessage(
-      `Renn Copilot: API key copied to clipboard. Open "Chat: Manage Language Models", pick "${PROVIDER_NAME}", and paste it in.`
-    );
+    const message = `Renn Copilot: API key copied to clipboard. Open "Chat: Manage Language Models", pick "${PROVIDER_NAME}", and paste it in.`;
+    void vscode.window.setStatusBarMessage(message, 5000);
   } catch (err: any) {
     void vscode.window.showErrorMessage(`Renn Copilot: couldn't fetch API key (${err.message}). Is the backend running?`);
   }
 }
 
-async function syncModels(showNotifications: boolean) {
+function syncModels(showNotifications: boolean): Promise<void> {
+  // Model toggles, capability updates, startup sync, and manual sync can all
+  // arrive close together. Serialize them so an older export can never
+  // finish last and overwrite chatLanguageModels.json with stale content.
+  const next = syncQueue.then(() => performSyncModels(showNotifications));
+  syncQueue = next.catch(() => undefined);
+  return next;
+}
+
+async function performSyncModels(showNotifications: boolean) {
   const config = vscode.workspace.getConfiguration("rennCopilot");
   const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
   const requireApiKey = getRequireApiKey();
@@ -426,20 +438,25 @@ async function syncModels(showNotifications: boolean) {
         // comment on why) and don't bother the user with a no-op notification.
         return;
       }
-      const reload = "Reload Window";
       const keyNote = !requireApiKey
         ? `No API key needed -- rennCopilot.requireApiKey is off, so the backend now runs without proxy authentication.`
         : remote.apiKey
           ? `The API key was copied to your clipboard -- paste it in with Ctrl+V (Cmd+V on Mac) and press Enter.`
           : `Backend didn't return an API key yet -- run "Renn Copilot: Copy API Key to Clipboard" once it has.`;
-      const message = created
-        ? `Added "${PROVIDER_NAME}" as a new Custom Endpoint provider with ${remote.models.length} model(s). ` +
-          `Reload VS Code, then check the model picker. ${keyNote}`
-        : `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" Custom Endpoint provider. ` +
+      if (created) {
+        const reload = "Reload Window";
+        const message =
+          `Added "${PROVIDER_NAME}" as a new Custom Endpoint provider with ${remote.models.length} model(s). ` +
           `Reload VS Code, then check the model picker. ${keyNote}`;
-      const choice = await vscode.window.showInformationMessage(message, reload);
-      if (choice === reload) {
-        void vscode.commands.executeCommand("workbench.action.reloadWindow");
+        const choice = await vscode.window.showInformationMessage(message, reload);
+        if (choice === reload) {
+          void vscode.commands.executeCommand("workbench.action.reloadWindow");
+        }
+      } else {
+        void vscode.window.showInformationMessage(
+          `Synced ${remote.models.length} model(s) into the "${PROVIDER_NAME}" Custom Endpoint provider. ` +
+            `If the model picker does not refresh automatically, reload VS Code. ${keyNote}`
+        );
       }
     } else if (requireApiKey && changed && remote.apiKey) {
       // Silent startup sync that still changed the file (e.g. the very
