@@ -1,11 +1,11 @@
 # Renn Copilot
 
-<img width="1558" height="954" alt="image" src="https://github.com/user-attachments/assets/7945f6fc-1b93-4f39-b188-b3fed9ef3f1e" />
-
-Injects Gemini, Anthropic (Claude), and GPT models into GitHub Copilot Chat in VS Code, via
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI) and its OAuth logins
-(Antigravity, Claude web/Claude Code, Codex, plus Gemini CLI/Qwen/iFlow with a caveat
-below).
+Injects Gemini, Anthropic (Claude), OpenAI/Codex, xAI/Grok, and arbitrary
+OpenAI-compatible models into GitHub Copilot Chat in VS Code through
+[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Built-in login flows cover
+Antigravity, Claude web/Claude Code, Codex, and xAI; API-key and custom-provider entries
+are managed from the same dashboard. Gemini CLI/Qwen/iFlow have a caveat described
+under [Known gaps](#known-gaps).
 
 Everything lives inside a **single, self-contained VS Code extension** — no separate
 terminal, no browser tab, no other process to start by hand:
@@ -29,9 +29,9 @@ by the extension), not as a public multi-tenant service.
 
   | Page | What it does |
   |---|---|
-  | Overview | Install/update the CLIProxyAPI binary, start/stop/restart it, at-a-glance status, setup checklist, health monitor, token trend. |
-  | Providers & Login | OAuth login per provider, stored-credentials list with per-credential and bulk enable/disable, quota reset. |
-  | Models | Toggle which models are exposed to Copilot Chat, per-provider and global enable/disable, search/filter, vision-capability verification. |
+  | Overview | Install or update the OS/architecture-specific CLIProxyAPI binary, compare the installed and latest GitHub versions, start/stop/restart it, and view status, setup, health, and token trends. |
+  | Providers & Login | Login to Antigravity, Claude, Codex, or xAI; add API keys and custom OpenAI-compatible providers; manage credential prefixes/groups, stored credentials, enablement, and quota reset. xAI uses a device-code flow for SuperGrok/X Premium+ accounts. |
+  | Models | Toggle which models are exposed to Copilot Chat, per-provider and global enable/disable, search/filter, live vision verification, and manual Vision/No vision overrides. |
   | Usage | Token usage by provider/model (sortable, filterable, with cost estimate), account health, OAuth/API key usage. |
   | Logs | Live tail of CLIProxyAPI's own request log and the backend's own process log, with search, copy, and download. |
   | Config | Raw `config.yaml` editor (hidden by default), routing strategy (round-robin / fill-first), discard/save. |
@@ -73,6 +73,7 @@ open as the workspace) while iterating.
 | `rennCopilot.autoStartServer` | `true` | Once the backend is up, automatically start the CLIProxyAPI server too (same as clicking "Start" on the Overview page). Only takes effect once the binary has been installed at least once. |
 | `rennCopilot.autoSyncOnStartup` | `true` | Automatically sync enabled models into Copilot's BYOK setting when VS Code starts. |
 | `rennCopilot.backendUrl` | `http://127.0.0.1:4317` | Base URL the extension, webview, and backend agree on. Only change this for advanced setups (e.g. a non-default port). |
+| `rennCopilot.requireApiKey` | `false` | Require VS Code to authenticate to the local proxy with its generated API key. It is off by default because some VS Code builds never show the Custom Endpoint API-key prompt; with the setting off, the local proxy is configured without proxy authentication. Enable it only when your VS Code build prompts for and sends the key. |
 
 ## Commands
 
@@ -84,11 +85,12 @@ open as the workspace) while iterating.
 
 ## Typical flow
 
-1. Install the extension. The backend (and, by default, the CLIProxyAPI server once its binary is installed) spawn automatically.
-2. Open the dashboard (Command Palette or Activity Bar icon). On first run, click "Install / Update binary" once on the Overview page.
-3. On Providers & Login, click "Login" for each provider you use — this opens the OAuth page in your browser; the dashboard polls until the token lands.
+1. Install the extension. The backend (and, by default, the CLIProxyAPI server once its binary is installed) starts automatically.
+2. Open the dashboard (Command Palette or Activity Bar icon). On first run, click **Install binary** on the Overview page. Later, use **Update version** when a newer GitHub release is available.
+3. On Providers & Login, log in or add an API key for each provider you use. Antigravity, Claude, and Codex open their authorization pages; xAI opens a device-code approval page and shows the code in the dashboard. Custom OpenAI-compatible providers can be added directly.
 4. On Models, toggle which models should be exposed to Copilot Chat.
-5. Reload VS Code (models sync on startup by default, or run "Renn Copilot: Sync Models" manually) — whenever the synced model list actually changes, the API key is copied to your clipboard automatically. Open Copilot Chat's model picker → "Manage Models..." and click the eye icon next to the new entries to enable them; when VS Code prompts for the API key, just paste (Ctrl+V / Cmd+V) and press Enter.
+5. Models sync on startup by default, or run **Renn Copilot: Sync Models from Dashboard** manually. Reload VS Code if its model picker does not refresh, then open **Manage Models...** and click the eye icon next to the Renn Copilot entries you want visible.
+6. With the default `rennCopilot.requireApiKey: false`, no proxy key is required. If you enable that setting, a changed sync copies the generated key to your clipboard; paste it when VS Code prompts for the Renn Copilot Custom Endpoint key.
 
 ## Vision capability detection
 
@@ -109,6 +111,10 @@ model whose support is still unknown. It consumes a small amount of real
 provider quota. Authentication, rate-limit, quota, timeout, and upstream errors
 remain **Unknown** rather than being misclassified as **No vision**.
 
+Each verification has a 30-second deadline. When several newly enabled models
+need verification, requests are processed with bounded concurrency rather than
+as an unbounded burst.
+
 For a custom provider, leave the selector on **Auto** to use live verification,
 or choose **Vision** / **No vision** when the provider's documentation gives a
 definitive answer. Models still marked Unknown are exported to VS Code with
@@ -122,22 +128,36 @@ an explicit override.
   itself has request-logging-to-file turned off in its `config.yaml`. Either ignore it (the
   Backend tab on the same page still shows our own process log), or enable it via the
   dashboard's Config page by adding a `logging-to-file: true` key and saving.
-- **Claude Opus 4.7+ requests fail with `temperature is deprecated for this model`.** A
-  known, still-unpatched upstream CLIProxyAPI issue as of mid-2026 — it doesn't strip
-  deprecated sampling params (`temperature`/`top_p`/`top_k`) per-model before forwarding.
-  `logging-proxy.js` at the repo root is a small standalone diagnostic/hotfix proxy that
-  sits between VS Code and CLIProxyAPI, strips those params only for the affected models,
-  and logs the raw request/response for debugging. Run with `node logging-proxy.js`, then
-  point the affected model entries in Copilot's BYOK settings at port `8318` instead of
-  `8317` temporarily, and revert once upstream fixes it.
+- **A Claude-family model rejects deprecated sampling parameters such as
+  `temperature`, `top_p`, or `top_k`.** Renn Copilot routes Claude-family chat
+  completions through its integrated sanitizing endpoint, which removes those parameters
+  before forwarding the request to CLIProxyAPI. Ensure the backend is running and re-sync
+  the affected model so its endpoint is current. The root-level `logging-proxy.js` remains
+  available as a standalone request/response diagnostic tool, but it is no longer required
+  for the normal extension flow.
 
 ## Known gaps
 
-- **Gemini CLI / Qwen / iFlow OAuth**: CLIProxyAPI's Management API only exposes
-  ready-made OAuth-URL endpoints for `antigravity`, `anthropic` (Claude), and `codex`
-  (see `backend/src/management-client.js`). The other three providers currently
-  require driving CLIProxyAPI's own CLI `--login` flags directly on the machine running
-  the backend; that flow isn't wired into the dashboard yet. `backend/src/routes.js`
-  returns a clear 400 explaining this if you try to log in to one of them from the UI.
-- **No automated tests** yet — changes are currently verified by `tsc` (extension host +
-  webview) and manual smoke-testing against a running CLIProxyAPI instance.
+- **Gemini CLI / Qwen / iFlow OAuth**: CLIProxyAPI's Management API exposes ready-made
+  OAuth URL endpoints for Antigravity, Anthropic, and Codex, while Renn Copilot separately
+  implements xAI's device-code CLI flow. Gemini CLI, Qwen, and iFlow still require
+  CLIProxyAPI's own CLI `--login` flags on the machine running the backend; those flows are
+  not wired into the dashboard yet.
+- Custom OpenAI-compatible providers vary in model metadata and error behavior. When a
+  provider does not expose definitive vision metadata, use live verification or a manual
+  override on the Models page.
+
+## Validation and tests
+
+The backend includes automated Node tests for model capability evidence, provider-scoped
+keys, legacy migration, custom-provider attribution, and fallback model export. The main
+validation commands are:
+
+```bash
+npm test --prefix backend
+npm run compile
+npm run webview:build
+```
+
+Dependency audits can be run independently in the repository root, `backend/`, and
+`webview-ui/` with `npm audit`.
