@@ -56,14 +56,6 @@ export function formatCompactNumber(n: number) {
   return n.toLocaleString("en-US", { notation: "compact", maximumFractionDigits: 2 });
 }
 
-export function parseRetryAfter(value: string | number | null | undefined): number | null {
-  if (value === null || value === undefined) return null;
-  const asNum = typeof value === "number" ? value : Number(value);
-  if (!Number.isNaN(asNum) && asNum > 0) return asNum > 1e12 ? asNum : asNum * 1000;
-  const parsed = Date.parse(String(value));
-  return Number.isNaN(parsed) ? null : parsed;
-}
-
 export function formatResetIn(epochMs: number | null): string | null {
   if (epochMs === null) return null;
   const diffMs = epochMs - Date.now();
@@ -73,13 +65,6 @@ export function formatResetIn(epochMs: number | null): string | null {
   const hours = Math.floor(mins / 60);
   const remMins = mins % 60;
   return `~${hours}h${remMins ? ` ${remMins}m` : ""}`;
-}
-
-export function formatWindowLabel(seconds: number | null): string {
-  if (!seconds) return "window";
-  const hours = seconds / 3600;
-  if (hours < 24) return `${Math.round(hours)}h`;
-  return `${Math.round(hours / 24)}d`;
 }
 
 export function rateLimitColor(usedPercent: number | null): string {
