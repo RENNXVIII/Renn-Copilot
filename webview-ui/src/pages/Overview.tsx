@@ -3,6 +3,7 @@ import { api } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import { useEmailReveal } from "../hooks/useEmailReveal";
 import { KpiCard, HealthRow, TrendChart, Checklist } from "../components/shared";
+import { postSyncModels } from "../vscodeApi";
 
 const TOKEN_USAGE_DAYS = 7;
 
@@ -46,6 +47,12 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
         } finally {
             setBusy(null);
             refreshStatus(undefined, true);
+            // Starting/stopping the server changes what should be in Copilot
+            // chat -- nudge the extension to reconcile chatLanguageModels.json
+            // now instead of waiting for its periodic status poll.
+            if (action === "start" || action === "stop" || action === "restart") {
+                postSyncModels();
+            }
         }
     }
 

@@ -109,6 +109,17 @@ let healthFastRetriesLeft = 0;
 let lastHealthAccounts: HealthEntry[] = [];
 let syncQueue: Promise<void> = Promise.resolve();
 
+// The models in chatLanguageModels.json are meant to mirror the CLIProxyAPI
+// server's running state in realtime: present while it's up, gone the moment
+// it stops (otherwise every Copilot chat request just 401s/fails against a
+// dead proxy). We poll GET /api/server/status on a short cadence and only
+// touch the file when `running` actually flips -- rewriting it every tick
+// would needlessly reset VS Code's manually-entered API-key secret (see
+// writeProviderEntry's doc comment).
+let serverStatusTimer: ReturnType<typeof setInterval> | undefined;
+let lastServerRunning: boolean | undefined;
+const SERVER_STATUS_POLL_MS = 5000;
+
 // While the backend/CLIProxyAPI are still spinning up (right after
 // activation, or right after a manual/auto "start"), a health check can fail
 // simply because the port isn't bound yet -- not a real problem. Rather than
@@ -186,24 +197,34 @@ export function activate(context: vscode.ExtensionContext) {
     // first second or so, and a sync attempt during that window used to fail
     // outright with ECONNREFUSED instead of just... waiting a moment.
     const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
-    void waitForBackendReady(backendUrl).then(() => syncModels(false));
+    void waitForBackendReady(backendUrl).then(() => reconcileModelsWithServer(true));
   }
 
   void refreshHealth();
   healthTimer = setInterval(() => void refreshHealth(), HEALTH_REFRESH_MS);
+
+  // Keep chatLanguageModels.json in lockstep with the server's running state.
+  serverStatusTimer = setInterval(() => void reconcileModelsWithServer(), SERVER_STATUS_POLL_MS);
+
   context.subscriptions.push({ dispose: () => clearInterval(healthTimer) });
   context.subscriptions.push({ dispose: () => clearTimeout(healthFastRetryTimer) });
+  context.subscriptions.push({ dispose: () => clearInterval(serverStatusTimer) });
 }
 
 export async function deactivate() {
   statusBarItem?.dispose();
   healthStatusBarItem?.dispose();
   clearInterval(healthTimer);
+  clearInterval(serverStatusTimer);
   clearTimeout(healthFastRetryTimer);
 
   const config = vscode.workspace.getConfiguration("rennCopilot");
   const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
   await backendManager.stopBackend(backendUrl);
+
+  // The server is going down with us -- drop the models so a Copilot chat
+  // launched before the backend is back up doesn't show a dead provider.
+  removeProviderEntry();
 }
 
 /** Polls the backend's root endpoint until it responds, or gives up after timeoutMs. */
@@ -227,6 +248,11 @@ async function startBackendCommand(context: vscode.ExtensionContext) {
   backendManager.startBackend(context);
   void vscode.window.showInformationMessage("Renn Copilot: starting backend...");
   armHealthFastRetries();
+  // Once the backend (and, if autoStartServer is on, CLIProxyAPI) is reachable,
+  // pull the models back in to match the now-running server.
+  const config = vscode.workspace.getConfiguration("rennCopilot");
+  const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
+  void waitForBackendReady(backendUrl).then(() => reconcileModelsWithServer(true));
 }
 
 async function stopBackendCommand() {
@@ -238,6 +264,9 @@ async function stopBackendCommand() {
   const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
   void vscode.window.showInformationMessage("Renn Copilot: stopping backend...");
   await backendManager.stopBackend(backendUrl);
+  // Backend (and the server it hosts) is down now -- reconcile removes the
+  // models straight away instead of waiting for the next poll tick.
+  await reconcileModelsWithServer(true);
   void refreshHealth();
 }
 
@@ -395,6 +424,27 @@ async function performSyncModels(showNotifications: boolean) {
   const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
   const requireApiKey = getRequireApiKey();
 
+  // The provider entry mirrors the CLIProxyAPI server: no server, no models.
+  // Writing them while the proxy is down would only leave Copilot chat with a
+  // provider whose every request fails. When it's stopped (or the backend is
+  // unreachable, so it can't be running) we remove the entry instead.
+  if (!(await isServerRunning(backendUrl))) {
+    lastServerRunning = false;
+    const { removed } = removeProviderEntry();
+    statusBarItem.text = "$(circle-slash) Renn Copilot";
+    statusBarItem.tooltip = "CLIProxyAPI server is stopped -- start it to sync models into Copilot chat.";
+    void refreshHealth();
+    if (showNotifications) {
+      void vscode.window.showInformationMessage(
+        removed
+          ? `Renn Copilot: server is stopped -- removed the "${PROVIDER_NAME}" models from Copilot chat.`
+          : `Renn Copilot: server is stopped, so there's nothing to sync. Start it from the dashboard first.`
+      );
+    }
+    return;
+  }
+
+  lastServerRunning = true;
   statusBarItem.text = "$(sync~spin) Renn Copilot";
   try {
     const remote = await fetchJson<{ models: RemoteModelEntry[]; apiKey?: string }>(
@@ -571,6 +621,74 @@ function writeProviderEntry(models: RemoteModelEntry[], apiKey: string): { creat
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(providers, null, 2), "utf8");
   return { created, changed: true };
+}
+
+/**
+ * Removes the single provider entry this extension owns from
+ * chatLanguageModels.json, leaving any other providers the user set up
+ * untouched. Like writeProviderEntry, it only writes the file back when it
+ * actually removed something -- an unconditional rewrite would reset VS
+ * Code's manually-entered API-key secret (see writeProviderEntry's comment),
+ * and this runs on every poll tick while the server is down.
+ */
+function removeProviderEntry(): { removed: boolean } {
+  const filePath = chatLanguageModelsPath();
+  let providers: ChatLanguageModelProvider[] = [];
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) providers = parsed;
+  } catch {
+    // Nothing on disk (or unparseable) -- nothing of ours to remove.
+    return { removed: false };
+  }
+
+  const index = providers.findIndex((p) => p.vendor === PROVIDER_VENDOR && p.name === PROVIDER_NAME);
+  if (index === -1) return { removed: false };
+
+  providers.splice(index, 1);
+  fs.writeFileSync(filePath, JSON.stringify(providers, null, 2), "utf8");
+  return { removed: true };
+}
+
+/** True only when the backend is reachable AND reports the CLIProxyAPI server up. */
+async function isServerRunning(backendUrl: string): Promise<boolean> {
+  try {
+    const status = await fetchJson<{ running: boolean }>(`${backendUrl}/api/server/status`);
+    return !!status.running;
+  } catch {
+    // Backend unreachable -> the server it hosts can't be running either.
+    return false;
+  }
+}
+
+/**
+ * Keeps chatLanguageModels.json in sync with the server's running state.
+ * Called on a short poll timer (and forced after explicit start/stop), it
+ * only acts when `running` actually flips -- so a steady-state server (up or
+ * down) never rewrites the file, preserving VS Code's stored API-key secret.
+ * Pass force=true to run the reconcile even without a detected transition
+ * (e.g. right after activation, when lastServerRunning is still unknown).
+ */
+async function reconcileModelsWithServer(force = false): Promise<void> {
+  const config = vscode.workspace.getConfiguration("rennCopilot");
+  const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
+
+  const running = await isServerRunning(backendUrl);
+  if (!force && running === lastServerRunning) return;
+  lastServerRunning = running;
+
+  if (running) {
+    // performSyncModels re-checks status and writes the model list (a no-op
+    // if nothing changed). Routed through syncModels so it stays serialized
+    // with manual/webview syncs.
+    await syncModels(false);
+  } else {
+    const { removed } = removeProviderEntry();
+    statusBarItem.text = "$(circle-slash) Renn Copilot";
+    statusBarItem.tooltip = "CLIProxyAPI server is stopped -- start it to sync models into Copilot chat.";
+    if (removed) void refreshHealth();
+  }
 }
 
 function fetchJson<T>(url: string): Promise<T> {
