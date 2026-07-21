@@ -774,14 +774,34 @@ router.put(
 );
 
 // --- Preferences --------------------------------------------------------
-// Currently just the one global "show full emails vs. masked" switch, read by
-// both the dashboard (every row with an email) and the VS Code extension's
-// status bar/tooltip, so toggling it in one place updates both.
-router.get("/preferences", (req, res) => res.json({ revealEmails: readState().revealEmails }));
+// Global dashboard/extension preferences. revealEmails is read by both the
+// webview (every row with an email) and the VS Code status bar/tooltip.
+// claudeCoworkMode is provider-level (Claude only) and is consumed by the
+// chat-proxy hop when forwarding Claude models to CLIProxyAPI.
+router.get("/preferences", (req, res) => {
+    const state = readState();
+    res.json({
+        revealEmails: Boolean(state.revealEmails),
+        claudeCoworkMode: Boolean(state.claudeCoworkMode),
+    });
+});
 router.put("/preferences", express.json(), (req, res) => {
-    const revealEmails = Boolean(req.body?.revealEmails);
-    const state = writeState({ revealEmails });
-    res.json({ revealEmails: state.revealEmails });
+    const current = readState();
+    const partial = {};
+    // Partial updates: only overwrite fields the client actually sent so
+    // useEmailReveal (which only knows about revealEmails) cannot clobber
+    // claudeCoworkMode, and vice versa.
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "revealEmails")) {
+        partial.revealEmails = Boolean(req.body.revealEmails);
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, "claudeCoworkMode")) {
+        partial.claudeCoworkMode = Boolean(req.body.claudeCoworkMode);
+    }
+    const state = Object.keys(partial).length ? writeState(partial) : current;
+    res.json({
+        revealEmails: Boolean(state.revealEmails),
+        claudeCoworkMode: Boolean(state.claudeCoworkMode),
+    });
 });
 
 // --- Misc -------------------------------------------------------------------

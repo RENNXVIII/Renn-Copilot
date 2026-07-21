@@ -115,6 +115,69 @@ export function Providers() {
   const [restarting, setRestarting] = useState(false);
   const { revealed, toggle: toggleRevealed } = useEmailReveal();
   const [savingPrefix, setSavingPrefix] = useState<Record<string, boolean>>({});
+  const { data: preferences, mutate: mutatePreferences } = usePolling(api.getPreferences, 30000);
+  const claudeCoworkMode = Boolean(preferences?.claudeCoworkMode);
+  const [savingCowork, setSavingCowork] = useState(false);
+  // VS Code webviews often block/break window.confirm -- use an in-app modal instead.
+  const [coworkConfirmOpen, setCoworkConfirmOpen] = useState(false);
+  const [coworkSaveError, setCoworkSaveError] = useState<string | null>(null);
+  // Visual-only preview while the confirm modal is open so the switch does not
+  // feel "stuck" before the user confirms.
+  const coworkSwitchOn = claudeCoworkMode || coworkConfirmOpen;
+
+  function requestClaudeCoworkMode(next: boolean) {
+    if (savingCowork) return;
+    setCoworkSaveError(null);
+    if (next) {
+      if (claudeCoworkMode || coworkConfirmOpen) return;
+      setCoworkConfirmOpen(true);
+      return;
+    }
+    if (!claudeCoworkMode) {
+      setCoworkConfirmOpen(false);
+      return;
+    }
+    void applyClaudeCoworkMode(false);
+  }
+
+  async function applyClaudeCoworkMode(next: boolean) {
+    if (savingCowork) return;
+    setCoworkConfirmOpen(false);
+    setCoworkSaveError(null);
+    setSavingCowork(true);
+    const previous = {
+      revealEmails: preferences?.revealEmails ?? false,
+      claudeCoworkMode,
+    };
+    mutatePreferences({ ...previous, claudeCoworkMode: next }, false);
+    try {
+      const result = await api.setPreferences({ claudeCoworkMode: next });
+      // Old backends ignore unknown fields and only echo revealEmails -- treat
+      // that as a hard failure so the switch does not silently snap back later.
+      if (typeof result?.claudeCoworkMode !== "boolean") {
+        throw new Error(
+          "Backend is outdated and does not support Cowork mode. Run “Renn Copilot: Stop Backend”, then “Start Backend”, or reload the VS Code window."
+        );
+      }
+      if (Boolean(result.claudeCoworkMode) !== next) {
+        throw new Error("Backend did not persist Cowork mode. Restart the Renn backend and try again.");
+      }
+      mutatePreferences(
+        {
+          revealEmails: Boolean(result.revealEmails),
+          claudeCoworkMode: Boolean(result.claudeCoworkMode),
+        },
+        false
+      );
+    } catch (err) {
+      mutatePreferences(previous, false);
+      const message = err instanceof Error ? err.message : String(err);
+      setCoworkSaveError(message);
+      console.error("Failed to save claudeCoworkMode", err);
+    } finally {
+      setSavingCowork(false);
+    }
+  }
 
   useEffect(() => {
     setBannedUntil(loadBans());
@@ -530,6 +593,47 @@ export function Providers() {
                   {p.note}
                 </p>
               )}
+              {p.id === "claude" && (
+                <div
+                  className={`cowork-toggle-card${coworkSwitchOn ? " is-on" : ""}${coworkConfirmOpen ? " is-pending" : ""}`}
+                >
+                  <button
+                    type="button"
+                    className="cowork-toggle-row"
+                    disabled={savingCowork}
+                    aria-pressed={claudeCoworkMode}
+                    onClick={() => requestClaudeCoworkMode(!coworkSwitchOn)}
+                  >
+                    <div className="cowork-toggle-copy">
+                      <div className="cowork-toggle-title">
+                        Cowork-style agent requests
+                        {claudeCoworkMode && <span className="badge neutral cowork-badge">On · own risk</span>}
+                      </div>
+                      <div className="card-desc">
+                        Route Claude chat with a Cowork/agent fingerprint and remap VS Code tools to
+                        Claude Code names (unmapped tools are dropped). Off by default.
+                      </div>
+                    </div>
+                    <span
+                      className={`toggle-switch${coworkSwitchOn ? " is-on" : ""}${savingCowork ? " is-busy" : ""}`}
+                      role="switch"
+                      aria-checked={claudeCoworkMode}
+                      aria-label="Cowork-style agent requests"
+                    />
+                  </button>
+                  {claudeCoworkMode && (
+                    <p className="card-desc cowork-risk-banner">
+                      Unofficial fingerprinting + tool remap may affect TOS, billing, account health,
+                      or agent capabilities. Not a guarantee of plan-limit billing.
+                    </p>
+                  )}
+                  {coworkSaveError && (
+                    <p className="card-desc cowork-error-banner" role="alert">
+                      {coworkSaveError}
+                    </p>
+                  )}
+                </div>
+              )}
               {isBanned ? (
                 <p className="card-desc" style={{ color: "var(--vscode-errorForeground)" }}>
                   Rate-limited by the provider — retry in {formatRemaining(banDeadline - now)}
@@ -634,6 +738,53 @@ export function Providers() {
 
       <Modal open={customModalOpen} onClose={() => setCustomModalOpen(false)}>
         <CustomProviderModalContent onClose={() => setCustomModalOpen(false)} groupOptions={groupOptions} onAssignGroup={assignCustomGroup} />
+      </Modal>
+
+      <Modal open={coworkConfirmOpen} onClose={() => !savingCowork && setCoworkConfirmOpen(false)}>
+        <div className="cowork-modal">
+          <div className="cowork-modal-hero">
+            <div className="cowork-modal-kicker">Claude provider</div>
+            <div className="cowork-modal-title">Enable Cowork-style requests?</div>
+            <p className="cowork-modal-lead">
+              Claude chat will look like a Cowork / agent client. This is unofficial and optional.
+            </p>
+            <button
+              type="button"
+              className="modal-close cowork-modal-close"
+              disabled={savingCowork}
+              onClick={() => setCoworkConfirmOpen(false)}
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="cowork-modal-callout" role="note">
+            <div className="cowork-modal-callout-title">At your own risk</div>
+            <ul className="cowork-modal-list">
+              <li>May affect billing classification or rate limits</li>
+              <li>May conflict with Anthropic terms or account standing</li>
+              <li>You can turn this off anytime</li>
+            </ul>
+          </div>
+
+          <details className="cowork-modal-details">
+            <summary>What changes technically</summary>
+            <p>
+              Renn stamps Cowork-style entrypoint + workload on Claude requests so CLIProxyAPI cloaking can embed
+              <code> cc_entrypoint=cowork</code> / <code>cc_workload=cowork</code>.
+            </p>
+          </details>
+
+          <div className="cowork-modal-actions">
+            <button className="btn secondary" disabled={savingCowork} onClick={() => setCoworkConfirmOpen(false)}>
+              Not now
+            </button>
+            <button className="btn btn-danger" disabled={savingCowork} onClick={() => void applyClaudeCoworkMode(true)}>
+              {savingCowork ? "Enabling..." : "I understand — enable"}
+            </button>
+          </div>
+        </div>
       </Modal>
     </div>
   );

@@ -129,12 +129,11 @@ an explicit override.
   Backend tab on the same page still shows our own process log), or enable it via the
   dashboard's Config page by adding a `logging-to-file: true` key and saving.
 - **A Claude-family model rejects deprecated sampling parameters such as
-  `temperature`, `top_p`, or `top_k`.** Renn Copilot routes Claude-family chat
-  completions through its integrated sanitizing endpoint, which removes those parameters
-  before forwarding the request to CLIProxyAPI. Ensure the backend is running and re-sync
-  the affected model so its endpoint is current. The root-level `logging-proxy.js` remains
-  available as a standalone request/response diagnostic tool, but it is no longer required
-  for the normal extension flow.
+  `temperature`, `top_p`, or `top_k`.** CLIProxyAPI now normalizes these parameters for
+  Claude-family requests upstream (stripping `temperature`/`top_p`, plus `top_k` when
+  extended thinking is active) before forwarding to Anthropic, so no extra handling is
+  needed on the extension side. Ensure the backend is running and re-sync the affected
+  model so its endpoint is current.
 
 ## Known gaps
 

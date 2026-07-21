@@ -9,14 +9,15 @@ export function useEmailReveal() {
 
   const setRevealed = useCallback(
     async (next: boolean) => {
-      mutate({ revealEmails: next }, false);
+      mutate({ ...(data ?? { revealEmails: false, claudeCoworkMode: false }), revealEmails: next }, false);
       try {
-        await api.setPreferences(next);
+        // Partial update only -- never send claudeCoworkMode from this hook.
+        await api.setPreferences({ revealEmails: next });
       } finally {
         mutate(undefined, true);
       }
     },
-    [mutate]
+    [mutate, data]
   );
 
   return { revealed, setRevealed, toggle: () => setRevealed(!revealed) };

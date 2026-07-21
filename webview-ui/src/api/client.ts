@@ -325,11 +325,15 @@ export const api = {
             method: "PUT",
             body: JSON.stringify({ strategy }),
         }),
-    getPreferences: () => request<{ revealEmails: boolean }>("/preferences"),
-    setPreferences: (revealEmails: boolean) =>
-        request<{ revealEmails: boolean }>("/preferences", {
+    getPreferences: () =>
+        request<{ revealEmails: boolean; claudeCoworkMode: boolean }>("/preferences"),
+    // Partial update -- callers may send either field. useEmailReveal only
+    // touches revealEmails; the Claude Cowork switch only touches
+    // claudeCoworkMode. Backend merges so one cannot clobber the other.
+    setPreferences: (prefs: { revealEmails?: boolean; claudeCoworkMode?: boolean }) =>
+        request<{ revealEmails: boolean; claudeCoworkMode: boolean }>("/preferences", {
             method: "PUT",
-            body: JSON.stringify({ revealEmails }),
+            body: JSON.stringify(prefs),
         }),
 
     getConfigYaml: () => request<string>("/config.yaml"),

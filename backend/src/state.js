@@ -13,6 +13,12 @@ const defaultState = {
   // the VS Code extension's status bar/tooltip -- replaces what used to be
   // a separate reveal/hide toggle on every individual row.
   revealEmails: false,
+  // When true, Claude chat requests leave renn's chat-proxy hop with a
+  // Cowork-style client fingerprint (User-Agent entrypoint + workload header)
+  // so CLIProxyAPI's Claude OAuth cloaking embeds cc_entrypoint=cowork /
+  // cc_workload=cowork. Off by default -- enabling is at the user's own risk
+  // (TOS / billing / account classification). See chat-proxy.js.
+  claudeCoworkMode: false,
   // Learned model id -> provider attributions, recorded only while exactly
   // one OAuth provider is logged in (the only time CLIProxyAPI's flat
   // /v1/models list is unambiguous). Consulted before guessProvider()'s
