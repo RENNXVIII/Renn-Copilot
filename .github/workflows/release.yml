@@ -1,0 +1,47 @@
+name: Release
+
+# Packages the extension and publishes it to the VS Code Marketplace when a
+# version tag is pushed (e.g. `git tag v0.7.17 && git push origin v0.7.17`).
+# Requires a VSCE_PAT repo secret (a Marketplace Personal Access Token).
+on:
+    push:
+        tags:
+            - "v*"
+
+jobs:
+    publish:
+        runs-on: ubuntu-latest
+        env:
+            VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+
+            - name: Install root deps
+              run: npm ci
+
+            - name: Compile + extension host tests
+              run: npm test
+
+            - name: Backend tests
+              working-directory: backend
+              run: npm ci && npm test
+
+            - name: Package VSIX
+              run: npm run package
+
+            - name: Upload VSIX artifact
+              uses: actions/upload-artifact@v4
+              with:
+                  name: vsix
+                  path: "*.vsix"
+
+            - name: Publish to Marketplace
+              # Skip publishing if no token is configured, so tagging still produces
+              # a downloadable VSIX artifact without failing the run.
+              if: ${{ env.VSCE_PAT != '' }}
+              run: npx --yes @vscode/vsce publish --packagePath *.vsix --pat "$VSCE_PAT"

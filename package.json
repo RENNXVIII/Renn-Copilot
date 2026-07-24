@@ -2,9 +2,13 @@
   "name": "renn-copilot",
   "displayName": "Renn Copilot",
   "description": "Self-contained CLIProxyAPI dashboard + BYOK model sync for GitHub Copilot Chat, entirely inside VS Code -- no separate terminal or browser tab needed.",
-  "version": "0.7.12",
+  "version": "0.7.17",
   "publisher": "RENNXVIII",
   "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RENNXVIII/Renn-Copilot.git"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -104,13 +108,14 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -w -p ./",
+    "test": "npm run compile && node --test \"out/test/**/*.test.js\"",
     "vscode:prepublish": "npm run compile",
     "backend:dev": "cd backend && npm run dev",
     "backend:install": "cd backend && npm install --omit=dev",
     "webview:dev": "cd webview-ui && npm run dev",
     "webview:install": "cd webview-ui && npm install",
     "webview:build": "cd webview-ui && npm run build",
-    "package": "npm run backend:install && npm run webview:install && npm run webview:build && vsce package --allow-missing-repository"
+    "package": "npm run backend:install && npm run webview:install && npm run webview:build && vsce package"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",

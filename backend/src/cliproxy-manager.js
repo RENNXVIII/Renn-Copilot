@@ -634,9 +634,69 @@ export async function restartServer() {
 // alongside the already-running persistent server -- they only share the
 // auth-dir on disk, not a network port.
 const xaiLogins = new Map(); // state -> { status: "wait" | "ok" | "error", error?: string }
-const XAI_LOGIN_TIMEOUT_MS = 6 * 60 * 1000; // a bit past the dashboard's own 5-minute poll window
+// The CLI's own device-code flow waits up to 1800s ("...will timeout in 1800
+// seconds if not authorized") before giving up. Our safety timer only exists
+// to reap a truly stuck child, so it has to sit *past* that -- an earlier
+// value (6 min) killed the process while the user was still completing the
+// grant in the browser, producing a false "authorization not completed"
+// error. Let the CLI decide the real deadline; we just backstop it.
+const XAI_LOGIN_TIMEOUT_MS = 31 * 60 * 1000;
 const XAI_LOGIN_URL_RE = /(https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=\S+)/;
 const XAI_LOGIN_CODE_RE = /enter this code:\s*(\S+)/i;
+// The CLI's -xai-login (CLIProxyAPI internal/cmd/xai_login.go's DoXAILogin)
+// only logs "xAI authentication failed: <err>" and returns on failure -- it
+// never os.Exit(1)s -- so the child still exits 0 even when nothing was
+// saved. Detecting success by exit code alone reports a false "ok" and the
+// dashboard shows the login worked while no credential ever lands in
+// auth-dir. Match the process's own success/failure markers instead: it
+// prints "Authentication saved to <path>" then "xAI authentication
+// successful!" only after the token store actually persisted the credential.
+const XAI_LOGIN_SUCCESS_RE = /xAI authentication successful!/i;
+const XAI_LOGIN_SAVED_RE = /Authentication saved to\s+(.+)/i;
+const XAI_LOGIN_FAILED_RE = /xAI authentication failed:\s*(.+)/i;
+
+// With `logging-to-file: true`, the CLI writes logrus output (including the
+// real "xAI authentication failed: ..." line) to <auth-dir>/logs/main.log
+// instead of stdout/stderr. These helpers let startXaiLogin() recover that
+// message so the dashboard surfaces the actual reason a login was rejected.
+function xaiLogFilePath() {
+    return path.join(settings.cliproxyHome, "auths", "logs", "main.log");
+}
+
+function xaiLogFileSize() {
+    try {
+        return fs.statSync(xaiLogFilePath()).size;
+    } catch {
+        return 0;
+    }
+}
+
+// Read only the log bytes appended since `startOffset` and return the last
+// "xAI authentication failed: <reason>" reason found there, if any.
+function readXaiLoginError(startOffset) {
+    try {
+        const filePath = xaiLogFilePath();
+        const size = fs.statSync(filePath).size;
+        if (size <= startOffset) return null;
+        const length = size - startOffset;
+        const buffer = Buffer.alloc(length);
+        const fd = fs.openSync(filePath, "r");
+        try {
+            fs.readSync(fd, buffer, 0, length, startOffset);
+        } finally {
+            fs.closeSync(fd);
+        }
+        const appended = buffer.toString("utf8");
+        let lastReason = null;
+        for (const line of appended.split(/\r?\n/)) {
+            const match = line.match(XAI_LOGIN_FAILED_RE);
+            if (match) lastReason = match[1].trim();
+        }
+        return lastReason;
+    } catch {
+        return null;
+    }
+}
 
 /**
  * Spawns a standalone `-xai-login` process and resolves with the device-flow
@@ -650,6 +710,15 @@ const XAI_LOGIN_CODE_RE = /enter this code:\s*(\S+)/i;
 export function startXaiLogin() {
     return new Promise((resolve, reject) => {
         const state = crypto.randomUUID();
+        // Record where the log file currently ends so that, if this login
+        // fails, we can read *only* the lines this process appends. The CLI's
+        // XAIAuthenticator logs a real failure ("xAI authentication failed:
+        // <reason>") through logrus, and because config.yaml has
+        // `logging-to-file: true` that line goes to auths/logs/main.log --
+        // NOT to the stdout/stderr we pipe here. Without reading the file we
+        // only ever see the child exit 0 with no marker and mislabel it as a
+        // generic "authorization not completed".
+        const logStartOffset = xaiLogFileSize();
         const child = spawn(binaryPath(), ["-config", configPath(), "-xai-login", "-no-browser"], {
             cwd: settings.cliproxyHome,
             stdio: ["ignore", "pipe", "pipe"],
@@ -685,7 +754,15 @@ export function startXaiLogin() {
 
         child.on("exit", (code) => {
             clearTimeout(safetyTimer);
-            if (code === 0) {
+            // Exit code is unreliable here (see XAI_LOGIN_* comment above): the CLI
+            // exits 0 even when it only logged "xAI authentication failed". Trust
+            // the process's own markers -- an explicit failure line always wins,
+            // otherwise require positive proof a credential was actually saved.
+            const failedMatch = buffered.match(XAI_LOGIN_FAILED_RE);
+            const savedMatch = buffered.match(XAI_LOGIN_SAVED_RE);
+            const succeeded = !failedMatch && (XAI_LOGIN_SUCCESS_RE.test(buffered) || !!savedMatch);
+
+            if (succeeded) {
                 entry.status = "ok";
                 // The standalone login process wrote the new auth file to disk, but
                 // the already-running server only reads auth-dir at startup -- it
@@ -697,7 +774,20 @@ export function startXaiLogin() {
                 }
             } else {
                 entry.status = "error";
-                entry.error = `xAI login exited with code ${code}` + (buffered.trim() ? `: ${buffered.trim().split("\n").pop()}` : "");
+                // Prefer the real reason logged by the CLI. It usually only
+                // appears in main.log (logging-to-file), e.g.
+                // "xAI authentication failed: xai: xai device token error:
+                // invalid_grant: Access denied" -- which tells the user the
+                // grant was rejected (often an account without xAI API
+                // access), not that they simply didn't finish authorizing.
+                const loggedError = failedMatch ? failedMatch[1].trim() : readXaiLoginError(logStartOffset);
+                if (loggedError) {
+                    entry.error = `xAI authentication failed: ${loggedError}`;
+                } else if (code !== 0) {
+                    entry.error = `xAI login exited with code ${code}` + (buffered.trim() ? `: ${buffered.trim().split("\n").pop()}` : "");
+                } else {
+                    entry.error = "xAI login ended without saving a credential (authorization not completed).";
+                }
             }
             if (!urlResolved) {
                 urlResolved = true;

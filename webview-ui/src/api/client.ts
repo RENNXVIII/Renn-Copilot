@@ -178,6 +178,10 @@ export interface RecentUsageRecord {
     tokens: Partial<Omit<UsageTokenTotals, "requests" | "failed">>;
     endpoint: string | null;
     auth_type: string | null;
+    // Human-readable account label the request was served by, joined from
+    // auth_index -> auth-files by the backend. Null when the credential is no
+    // longer present (deleted) or auth-files couldn't be read.
+    account: string | null;
 }
 
 export interface UsageTokenSummary {

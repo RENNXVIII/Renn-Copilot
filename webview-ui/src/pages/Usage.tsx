@@ -151,6 +151,9 @@ export function Usage() {
                 {tokenData.recent.slice(0, 20).map((r: RecentUsageRecord, i: number) => (
                   <div key={i} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: "0.8em" }}>
                     <span className="card-desc">{r.timestamp ? new Date(r.timestamp).toLocaleString() : "unknown time"}</span>
+                    <span style={{ minWidth: 0, flex: 1, textAlign: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {r.account ?? "unknown account"}
+                    </span>
                     <span>
                       {r.provider} / {r.model}
                     </span>
@@ -188,4 +191,3 @@ function KpiBlock({ label, value, color }: { label: string; value: string; color
     </div>
   );
 }
-

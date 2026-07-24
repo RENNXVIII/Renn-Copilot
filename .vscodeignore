@@ -1,7 +1,9 @@
 .vscode/**
 .vscode-test/**
 .claude/**
+.github/**
 src/**
+out/test/**
 webview-ui/src/**
 webview-ui/node_modules/**
 webview-ui/*.config.*

@@ -7,6 +7,14 @@ import * as os from "node:os";
 import * as backendManager from "./backend-manager";
 import { openDashboardPanel } from "./webview-panel";
 import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
+import {
+  PROVIDER_NAME,
+  maskEmail,
+  upsertProviderEntry,
+  stripProviderEntry,
+  type RemoteModelEntry,
+  type ChatLanguageModelProvider,
+} from "./provider-entry";
 
 // As of VS Code's June 2026 BYOK overhaul, github.copilot.chat.customOAIModels
 // (a settings.json key) is gone -- VS Code now refuses to even write it via
@@ -22,46 +30,8 @@ import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
 // rennCopilot.requireApiKey lets that case be worked around: when turned
 // off, the backend is flipped (via setProxyAuthEnabled) to stop requiring
 // its proxy API key at all, so it doesn't matter that VS Code never sends one.
-const PROVIDER_NAME = "Renn Copilot";
-const PROVIDER_VENDOR = "customendpoint";
-const API_TYPE = "chat-completions"; // CLIProxyAPI exposes an OpenAI-compatible /v1/chat/completions surface
-
 function getRequireApiKey(): boolean {
   return vscode.workspace.getConfiguration("rennCopilot").get<boolean>("requireApiKey", false);
-}
-
-/**
- * Masks the local part of an email so the full address doesn't show up in
- * the status bar tooltip / quick pick (mirrors dashboard/lib/utils.ts's
- * maskEmail -- kept duplicated here since the extension has no shared lib
- * with the dashboard). Non-email strings pass through unchanged.
- */
-function maskEmail(value: string): string {
-  const at = value.indexOf("@");
-  if (at <= 0) return value;
-  const local = value.slice(0, at);
-  const domain = value.slice(at);
-  const visible = local.slice(0, Math.min(2, local.length));
-  return `${visible}${"•".repeat(Math.max(3, local.length - visible.length))}${domain}`;
-}
-
-interface RemoteModelEntry {
-  id: string;
-  name: string;
-  url: string;
-  toolCalling?: boolean;
-  vision?: boolean;
-  maxInputTokens?: number;
-  maxOutputTokens?: number;
-}
-
-interface ChatLanguageModelProvider {
-  name: string;
-  vendor: string;
-  apiKey?: string;
-  apiType?: string;
-  models?: RemoteModelEntry[];
-  [key: string]: unknown;
 }
 
 // Shape of the entries in GET /api/usage's `accounts` array -- one per
@@ -109,6 +79,15 @@ let healthFastRetriesLeft = 0;
 let lastHealthAccounts: HealthEntry[] = [];
 let syncQueue: Promise<void> = Promise.resolve();
 
+// Watches chatLanguageModels.json so a manual edit/delete (e.g. the user
+// removing our provider by hand, or another tool rewriting the file) triggers
+// a reconcile right away instead of waiting up to SERVER_STATUS_POLL_MS.
+let modelsFileWatcher: vscode.FileSystemWatcher | undefined;
+let modelsFileDebounce: ReturnType<typeof setTimeout> | undefined;
+// Set briefly around our own writes so the watcher can ignore the change it
+// just caused -- otherwise every sync would immediately re-trigger a reconcile.
+let ignoreNextModelsFileEvent = false;
+
 // The models in chatLanguageModels.json are meant to mirror the CLIProxyAPI
 // server's running state in realtime: present while it's up, gone the moment
 // it stops (otherwise every Copilot chat request just 401s/fails against a
@@ -136,7 +115,28 @@ let revealEmails = false;
 
 const HEALTH_REFRESH_MS = 30_000;
 
+// Kept module-level so chatLanguageModelsPath() can resolve the active VS Code
+// profile's config dir (see its doc comment) without threading `context`
+// through writeProviderEntry/removeProviderEntry and every one of their callers.
+let extensionContext: vscode.ExtensionContext | undefined;
+
+// Shape of GET /api/server/status: the CLIProxyAPI binary's running state plus
+// its installed/latest version and whether an update is available (getStatus +
+// getVersionStatus on the backend). Version fields are null when GitHub can't
+// be reached, so the update indicator only shows when we actually know.
+interface ServerStatus {
+  running: boolean;
+  installedVersion?: string | null;
+  latestVersion?: string | null;
+  updateAvailable?: boolean;
+}
+
+// Latest status seen from the backend, so the status bar can show the running
+// CLIProxyAPI version and flag when a newer one is available.
+let lastServerStatus: ServerStatus | undefined;
+
 export function activate(context: vscode.ExtensionContext) {
+  extensionContext = context;
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = "rennCopilot.syncModels";
   statusBarItem.text = "$(sync) Renn Copilot";
@@ -206,9 +206,42 @@ export function activate(context: vscode.ExtensionContext) {
   // Keep chatLanguageModels.json in lockstep with the server's running state.
   serverStatusTimer = setInterval(() => void reconcileModelsWithServer(), SERVER_STATUS_POLL_MS);
 
+  setupModelsFileWatcher();
+
   context.subscriptions.push({ dispose: () => clearInterval(healthTimer) });
   context.subscriptions.push({ dispose: () => clearTimeout(healthFastRetryTimer) });
   context.subscriptions.push({ dispose: () => clearInterval(serverStatusTimer) });
+  context.subscriptions.push({
+    dispose: () => {
+      clearTimeout(modelsFileDebounce);
+      modelsFileWatcher?.dispose();
+    },
+  });
+}
+
+// Debounce window for watcher-driven reconciles: coalesces the burst of events
+// an editor fires while saving into a single reconcile.
+const MODELS_FILE_DEBOUNCE_MS = 500;
+
+/**
+ * Watches chatLanguageModels.json for out-of-band changes and reconciles when
+ * one is seen. Skips events we caused ourselves (see ignoreNextModelsFileEvent)
+ * and debounces to collapse a save's event burst into one reconcile.
+ */
+function setupModelsFileWatcher() {
+  const filePath = chatLanguageModelsPath();
+  modelsFileWatcher = vscode.workspace.createFileSystemWatcher(filePath);
+  const onEvent = () => {
+    if (ignoreNextModelsFileEvent) {
+      ignoreNextModelsFileEvent = false;
+      return;
+    }
+    clearTimeout(modelsFileDebounce);
+    modelsFileDebounce = setTimeout(() => void reconcileModelsWithServer(true), MODELS_FILE_DEBOUNCE_MS);
+  };
+  modelsFileWatcher.onDidChange(onEvent);
+  modelsFileWatcher.onDidCreate(onEvent);
+  modelsFileWatcher.onDidDelete(onEvent);
 }
 
 export async function deactivate() {
@@ -220,11 +253,14 @@ export async function deactivate() {
 
   const config = vscode.workspace.getConfiguration("rennCopilot");
   const backendUrl = config.get<string>("backendUrl", "http://127.0.0.1:4317");
-  await backendManager.stopBackend(backendUrl);
 
   // The server is going down with us -- drop the models so a Copilot chat
   // launched before the backend is back up doesn't show a dead provider.
+  // Do this *first* (it's synchronous): VS Code doesn't reliably await an
+  // async deactivate() at shutdown, so if the process is killed mid-await
+  // the file write below might never run.
   removeProviderEntry();
+  await backendManager.stopBackend(backendUrl);
 }
 
 /** Polls the backend's root endpoint until it responds, or gives up after timeoutMs. */
@@ -463,10 +499,12 @@ async function performSyncModels(showNotifications: boolean) {
 
     const { created, changed } = writeProviderEntry(remote.models, requireApiKey ? remote.apiKey ?? "" : "");
 
-    statusBarItem.text = `$(check) Renn Copilot (${remote.models.length})`;
-    statusBarItem.tooltip = changed
-      ? `Synced ${remote.models.length} model(s) into chatLanguageModels.json. Click to re-sync.`
-      : `Already up to date (${remote.models.length} model(s)). Click to re-sync.`;
+    const version = versionStatusBarSuffix();
+    statusBarItem.text = `$(check) Renn Copilot (${remote.models.length})${version.text}`;
+    statusBarItem.tooltip =
+      (changed
+        ? `Synced ${remote.models.length} model(s) into chatLanguageModels.json. Click to re-sync.`
+        : `Already up to date (${remote.models.length} model(s)). Click to re-sync.`) + version.tooltip;
 
     // A sync round-trip means the backend is reachable -- piggyback a health
     // refresh on it so the dot count doesn't lag behind a manual re-sync.
@@ -530,11 +568,13 @@ async function performSyncModels(showNotifications: boolean) {
 }
 
 /**
- * Locates User/chatLanguageModels.json for the running VS Code build. This
- * covers the default profile only -- if the user is on a named profile, VS
- * Code stores profile-specific config under User/profiles/<id>/ instead, and
- * this won't find it (not handled here; the user would need to switch to
- * the default profile or this would need extending).
+ * Locates chatLanguageModels.json for the running VS Code build. On the
+ * default profile it's under User/; on a named profile VS Code stores config
+ * under User/profiles/<id>/ instead. We detect that case from
+ * context.globalStorageUri (see profileDirFromContext),
+ * so a user on a named profile gets their profile's file rather than the
+ * default one -- falling back to the default User/ dir when no profile can be
+ * determined (e.g. context isn't available yet).
  */
 function chatLanguageModelsPath(): string {
   const folderByAppName: Record<string, string> = {
@@ -554,7 +594,28 @@ function chatLanguageModelsPath(): string {
     base = process.env.XDG_CONFIG_HOME ?? path.join(os.homedir(), ".config");
   }
 
-  return path.join(base, folderName, "User", "chatLanguageModels.json");
+  const userDir = path.join(base, folderName, "User");
+  const profileDir = profileDirFromContext();
+  return path.join(profileDir ?? userDir, "chatLanguageModels.json");
+}
+
+/**
+ * Resolves the active profile's config dir (User/profiles/<id>) when the
+ * window is running under a named VS Code profile. There's no direct API for
+ * the active profile id, but context.globalStorageUri encodes it: for the
+ * default profile it's ".../User/globalStorage/<extId>", and for a named
+ * profile ".../User/profiles/<id>/globalStorage/<extId>". We walk up from the
+ * globalStorage segment and, if the parent is a "profiles/<id>" dir, use it.
+ * Returns undefined for the default profile (or if context isn't set yet), so
+ * the caller falls back to the plain User/ dir.
+ */
+function profileDirFromContext(): string | undefined {
+  const globalStorage = extensionContext?.globalStorageUri?.fsPath;
+  if (!globalStorage) return undefined;
+  // .../User/profiles/<id>/globalStorage/<extId>  ->  profileRoot = .../User/profiles/<id>
+  const profileRoot = path.dirname(path.dirname(globalStorage));
+  if (path.basename(path.dirname(profileRoot)) === "profiles") return profileRoot;
+  return undefined;
 }
 
 /**
@@ -591,35 +652,12 @@ function writeProviderEntry(models: RemoteModelEntry[], apiKey: string): { creat
     providers = [];
   }
 
-  const existingIndex = providers.findIndex(
-    (p) => p.vendor === PROVIDER_VENDOR && p.name === PROVIDER_NAME
-  );
-  const entry: ChatLanguageModelProvider = {
-    name: PROVIDER_NAME,
-    vendor: PROVIDER_VENDOR,
-    // Omit the field entirely rather than writing an empty string -- an
-    // empty "apiKey": "" line is misleading when rennCopilot.requireApiKey
-    // is off (the backend isn't expecting one at all in that mode).
-    ...(apiKey ? { apiKey } : {}),
-    apiType: API_TYPE,
-    models,
-  };
-
-  const created = existingIndex === -1;
-  const existingEntry = created ? null : providers[existingIndex];
-  const unchanged = !created && JSON.stringify(existingEntry) === JSON.stringify(entry);
-  if (unchanged) {
-    return { created: false, changed: false };
-  }
-
-  if (created) {
-    providers.push(entry);
-  } else {
-    providers[existingIndex] = entry;
-  }
+  const { providers: next, created, changed } = upsertProviderEntry(providers, models, apiKey);
+  if (!changed) return { created: false, changed: false };
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(providers, null, 2), "utf8");
+  ignoreNextModelsFileEvent = true;
+  fs.writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
   return { created, changed: true };
 }
 
@@ -643,23 +681,43 @@ function removeProviderEntry(): { removed: boolean } {
     return { removed: false };
   }
 
-  const index = providers.findIndex((p) => p.vendor === PROVIDER_VENDOR && p.name === PROVIDER_NAME);
-  if (index === -1) return { removed: false };
+  const { providers: next, removed } = stripProviderEntry(providers);
+  if (!removed) return { removed: false };
 
-  providers.splice(index, 1);
-  fs.writeFileSync(filePath, JSON.stringify(providers, null, 2), "utf8");
+  ignoreNextModelsFileEvent = true;
+  fs.writeFileSync(filePath, JSON.stringify(next, null, 2), "utf8");
   return { removed: true };
 }
 
 /** True only when the backend is reachable AND reports the CLIProxyAPI server up. */
 async function isServerRunning(backendUrl: string): Promise<boolean> {
   try {
-    const status = await fetchJson<{ running: boolean }>(`${backendUrl}/api/server/status`);
+    const status = await fetchJson<ServerStatus>(`${backendUrl}/api/server/status`);
+    lastServerStatus = status;
     return !!status.running;
   } catch {
-    // Backend unreachable -> the server it hosts can't be running either.
+    // Backend unreachable -> the server it hosts can't be running either, and
+    // we have no fresh version info to show.
+    lastServerStatus = undefined;
     return false;
   }
+}
+
+/**
+ * Builds the version/update suffix for the status bar text and tooltip from the
+ * last status we saw. Returns empty strings when no version is known (e.g.
+ * GitHub was unreachable), so the caller can append unconditionally.
+ */
+function versionStatusBarSuffix(): { text: string; tooltip: string } {
+  const status = lastServerStatus;
+  if (!status?.installedVersion) return { text: "", tooltip: "" };
+  if (status.updateAvailable && status.latestVersion) {
+    return {
+      text: " $(arrow-up)",
+      tooltip: `\nCLIProxyAPI ${status.installedVersion} -- update available (${status.latestVersion}).`,
+    };
+  }
+  return { text: "", tooltip: `\nCLIProxyAPI ${status.installedVersion} (up to date).` };
 }
 
 /**
@@ -691,12 +749,44 @@ async function reconcileModelsWithServer(force = false): Promise<void> {
   }
 }
 
-function fetchJson<T>(url: string): Promise<T> {
+// A transient failure (network hiccup, timeout, or a 5xx while the backend is
+// still coming up) is worth a quick retry; a 4xx is a real answer and isn't.
+const FETCH_MAX_ATTEMPTS = 3;
+const FETCH_BACKOFF_BASE_MS = 250; // 250ms, 500ms between the 3 attempts
+
+function isRetriableFetchError(err: unknown): boolean {
+  const status = (err as { statusCode?: number })?.statusCode;
+  if (typeof status === "number") return status >= 500;
+  // No status attached -> transport-level failure (ECONNREFUSED, timeout, ...).
+  return true;
+}
+
+/**
+ * fetchJson with a short retry/backoff for transient failures. 4xx responses
+ * reject immediately (they won't change on retry); network errors, timeouts,
+ * and 5xx get up to FETCH_MAX_ATTEMPTS tries with exponential backoff.
+ */
+async function fetchJson<T>(url: string): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < FETCH_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await fetchJsonOnce<T>(url);
+    } catch (err) {
+      lastErr = err;
+      if (!isRetriableFetchError(err) || attempt === FETCH_MAX_ATTEMPTS - 1) break;
+      await new Promise((r) => setTimeout(r, FETCH_BACKOFF_BASE_MS * 2 ** attempt));
+    }
+  }
+  throw lastErr;
+}
+
+function fetchJsonOnce<T>(url: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith("https") ? https : http;
     const req = lib.get(url, (res) => {
       if (!res.statusCode || res.statusCode >= 400) {
-        reject(new Error(`HTTP ${res.statusCode}`));
+        // Attach statusCode so fetchJson can tell 4xx (final) from 5xx (retriable).
+        reject(Object.assign(new Error(`HTTP ${res.statusCode}`), { statusCode: res.statusCode }));
         res.resume();
         return;
       }

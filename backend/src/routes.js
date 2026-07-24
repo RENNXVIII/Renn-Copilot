@@ -307,10 +307,39 @@ router.get(
 // usage-store.js, since that endpoint deletes records the moment anyone
 // reads them. `days` controls how many of our own stored daily buckets to
 // sum over (default 7); it does not change what CLIProxyAPI itself retains.
-router.get("/usage/tokens", (req, res) => {
-    const days = Number(req.query.days) || 7;
-    res.json(getUsageSummary({ days }));
-});
+router.get(
+    "/usage/tokens",
+    asyncHandler(async (req, res) => {
+        const days = Number(req.query.days) || 7;
+        const summary = getUsageSummary({ days });
+
+        // Each recent record carries the runtime `auth_index` CLIProxyAPI
+        // assigned the credential that served it (see usage-store.js) but not
+        // a human name. Join it back to the account's label the same way
+        // /usage/credentials does, so the dashboard can show *which* account
+        // handled each request instead of just provider/model. Auth-files is
+        // best-effort here -- if it can't be read (server down, etc.) we just
+        // leave `account` null rather than fail the whole usage view.
+        let labelByAuth = {};
+        try {
+            const authFilesRaw = await management.listAuthFiles();
+            const files = Array.isArray(authFilesRaw?.files) ? authFilesRaw.files : normalizeList(authFilesRaw);
+            for (const f of files) {
+                const authIndex = f.auth_index !== undefined && f.auth_index !== null ? String(f.auth_index) : null;
+                if (authIndex) labelByAuth[authIndex] = f.label || f.email || f.name || null;
+            }
+        } catch {
+            labelByAuth = {};
+        }
+
+        summary.recent = summary.recent.map((r) => ({
+            ...r,
+            account: r.auth_index != null ? labelByAuth[String(r.auth_index)] ?? null : null,
+        }));
+
+        res.json(summary);
+    })
+);
 
 const ZERO_CRED_STATS = { requests: 0, failed: 0, input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0, total_tokens: 0 };
 
@@ -491,27 +520,13 @@ async function getMergedCatalog() {
     }
 }
 
-// Strips a live id's prefix segment (see /auth-files/prefix) back down to the
-// underlying model name, e.g. "claude/claude-sonnet-4-6" -> "claude-sonnet-4-6".
-// Only ever strips when the segment before "/" is a real, currently-set
-// credential prefix -- a customProvider or catalog id's own "/" (e.g. an
-// OpenRouter-style "meta-llama/llama-3.1-70b") is left untouched.
-function basePartOf(id, prefixIndex) {
-    const slash = id.indexOf("/");
-    if (slash > 0 && prefixIndex[id.slice(0, slash)]) return id.slice(slash + 1);
-    return id;
-}
-
-function capabilityKeyFor(model, prefixIndex) {
-    // A prefixed id identifies one concrete credential route. Keep the full id
-    // so two credentials from the same provider exposing the same base model
-    // can have independent evidence and overrides.
-    return modelCapabilityKey(model);
-}
-
-function storedCapabilityFor(model, state, prefixIndex) {
+// A prefixed id identifies one concrete credential route, so the capability
+// key keeps the full id (see modelCapabilityKey) -- two credentials from the
+// same provider exposing the same base model can then have independent
+// evidence and overrides.
+function storedCapabilityFor(model, state) {
     const capabilities = readState().modelCapabilities || state.modelCapabilities || {};
-    const key = capabilityKeyFor(model, prefixIndex);
+    const key = modelCapabilityKey(model);
     if (capabilities[key]) return capabilities[key];
 
     // Best-effort migration for state written before capabilities were scoped
@@ -527,8 +542,8 @@ function storedCapabilityFor(model, state, prefixIndex) {
     return migrated;
 }
 
-async function probeAndStoreVision(model, prefixIndex) {
-    const key = capabilityKeyFor(model, prefixIndex);
+async function probeAndStoreVision(model) {
+    const key = modelCapabilityKey(model);
     if (visionProbeInFlight.has(key)) return visionProbeInFlight.get(key);
 
     const pending = probeVisionSupport(model.id)
@@ -557,13 +572,13 @@ router.get(
     "/models",
     asyncHandler(async (req, res) => {
         const state = readState();
-        const { catalog, source, liveError, prefixIndex } = await getMergedCatalog();
+        const { catalog, source, liveError } = await getMergedCatalog();
 
         const models = catalog.map((m) => {
             return {
                 ...m,
                 enabled: state.enabledModelIds.includes(m.id),
-                capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state, prefixIndex)),
+                capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
             };
         });
         res.json({ models, source, liveError });
@@ -579,10 +594,10 @@ router.post(
     "/models/:id/verify-vision",
     asyncHandler(async (req, res) => {
         const modelId = req.params.id;
-        const { catalog, prefixIndex } = await getMergedCatalog();
+        const { catalog } = await getMergedCatalog();
         const model = catalog.find((item) => item.id === modelId);
         if (!model) return res.status(404).json({ error: `Model "${modelId}" is not currently available.` });
-        const result = await probeAndStoreVision(model, prefixIndex);
+        const result = await probeAndStoreVision(model);
         res.status(result.vision === "unknown" ? 409 : 200).json({ modelId, ...result, inconclusive: result.vision === "unknown" });
     })
 );
@@ -597,12 +612,12 @@ router.patch(
             return res.status(400).json({ error: "Body must include { vision: true | false | \"auto\" }." });
         }
 
-        const { catalog, prefixIndex } = await getMergedCatalog();
+        const { catalog } = await getMergedCatalog();
         const model = catalog.find((item) => item.id === modelId);
         if (!model) return res.status(404).json({ error: `Model "${modelId}" is not currently available.` });
 
         const current = { ...(readState().modelCapabilities || {}) };
-        const key = capabilityKeyFor(model, prefixIndex);
+        const key = modelCapabilityKey(model);
         if (vision === "auto") {
             const existing = current[key];
             if (existing?.probe && existing.probe.source !== "manual") current[key] = { probe: existing.probe };
@@ -630,7 +645,7 @@ router.put(
         // vision probe is unavailable. Persist the user's choice immediately;
         // all capability checks below are best-effort enrichment only.
         const state = writeState({ enabledModelIds });
-        const { catalog, prefixIndex } = await getMergedCatalog();
+        const { catalog } = await getMergedCatalog();
         const newlyEnabled = catalog.filter((model) => enabledModelIds.includes(model.id) && !previousIds.has(model.id));
 
         const modelProviderMemory = { ...(readState().modelProviderMemory || {}) };
@@ -646,8 +661,8 @@ router.put(
         for (let offset = 0; offset < newlyEnabled.length; offset += probeConcurrency) {
             const batch = newlyEnabled.slice(offset, offset + probeConcurrency);
             await Promise.allSettled(batch.map(async (model) => {
-                const capability = resolveVisionCapability(model, storedCapabilityFor(model, previousState, prefixIndex));
-                if (capability.vision === "unknown") await probeAndStoreVision(model, prefixIndex);
+                const capability = resolveVisionCapability(model, storedCapabilityFor(model, previousState));
+                if (capability.vision === "unknown") await probeAndStoreVision(model);
             }));
         }
         res.json({ ok: true, enabledModelIds: state.enabledModelIds });
@@ -658,14 +673,14 @@ router.get(
     "/models/export",
     asyncHandler(async (req, res) => {
         const state = readState();
-        const { catalog, prefixIndex } = await getMergedCatalog();
+        const { catalog } = await getMergedCatalog();
         // Export every model the user explicitly enabled, even if the live
         // catalog is temporarily missing it during startup or account recovery.
         // This keeps the extension's Renn Copilot group stable across reloads.
         const enabled = mergeEnabledModels(catalog, state.enabledModelIds, state.modelProviderMemory);
         const entries = enabled.map((m) =>
             toCopilotModelEntry(
-                { ...m, capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state, prefixIndex)) },
+                { ...m, capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)) },
                 { proxyUrl: proxyBaseUrl(), ownBaseUrl: `http://127.0.0.1:${settings.port}` }
             )
         );

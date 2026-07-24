@@ -1,0 +1,43 @@
+name: CI
+
+on:
+    push:
+        branches: [main, master]
+    pull_request:
+
+jobs:
+    build-test:
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/checkout@v4
+
+            - uses: actions/setup-node@v4
+              with:
+                  node-version: 20
+                  cache: npm
+
+            - name: Install root deps
+              run: npm ci
+
+            - name: Compile + extension host tests
+              run: npm test
+
+            - name: Install backend deps
+              working-directory: backend
+              run: npm ci
+
+            - name: Backend tests
+              working-directory: backend
+              run: npm test
+
+            - name: Install webview-ui deps
+              working-directory: webview-ui
+              run: npm ci
+
+            - name: Webview-ui type-check
+              working-directory: webview-ui
+              run: npx tsc --noEmit -p tsconfig.json
+
+            - name: Webview-ui build
+              working-directory: webview-ui
+              run: npm run build

@@ -342,7 +342,11 @@ export function Providers() {
         // keep polling; transient network errors are expected while CLIProxyAPI restarts
       }
     }, 2000);
-    setTimeout(() => clearInterval(interval), 5 * 60 * 1000);
+    // Match the CLI's own 1800s device-code deadline (see cliproxy-manager's
+    // XAI_LOGIN_TIMEOUT_MS). Stopping at 5 min gave up while xAI logins were
+    // still awaiting the user's browser grant, so a later success was never
+    // shown. Give the slower flows (like xAI) the full 30 min to land.
+    setTimeout(() => clearInterval(interval), 30 * 60 * 1000);
   }
 
   useEffect(() => {
