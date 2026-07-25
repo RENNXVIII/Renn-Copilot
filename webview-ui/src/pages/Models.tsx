@@ -151,6 +151,12 @@ export function Models() {
             Toggle which models get pushed into Copilot Chat's BYOK list. The extension picks these up automatically (or run
             "Renn Copilot: Sync Models" manually).
           </p>
+          {models.length > 0 && (
+            <p className="page-hint">
+              <strong>{models.filter((m) => m.enabled).length}</strong> of {models.length} models enabled across{" "}
+              {presentProviders.size} provider{presentProviders.size === 1 ? "" : "s"}.
+            </p>
+          )}
         </div>
         <div className="btn-row">
           {saving && <span className="badge neutral">Saving...</span>}

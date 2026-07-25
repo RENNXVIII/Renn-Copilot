@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, type ProviderModelUsage, type RecentUsageRecord } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
-import { TrendChart } from "../components/shared";
+import { TrendChart, SuccessMeter } from "../components/shared";
 import { ratesFor, formatUsd, formatNumber } from "../lib/utils";
 import { AuthFilesTable } from "../components/AuthFilesTable";
 
@@ -170,13 +170,21 @@ export function Usage() {
 
       {serverRunning && (
         <div className="grid">
-          <KpiBlock label={`Total requests (${BUCKET_WINDOW_LABEL})`} value={String(totalRequests)} />
-          <KpiBlock label="Successful" value={String(data?.totals.success ?? 0)} color="var(--vscode-testing-iconPassed, #4caf50)" />
-          <KpiBlock label="Failed" value={String(data?.totals.failed ?? 0)} color="var(--vscode-testing-iconFailed, #f14c4c)" />
+          <KpiBlock label={`Total requests (${BUCKET_WINDOW_LABEL})`} value={formatNumber(totalRequests)} />
+          <KpiBlock label="Successful" value={formatNumber(data?.totals.success ?? 0)} color="var(--vscode-testing-iconPassed, #4caf50)" />
+          <KpiBlock label="Failed" value={formatNumber(data?.totals.failed ?? 0)} color="var(--vscode-testing-iconFailed, #f14c4c)" />
         </div>
       )}
 
-      {serverRunning && successRate !== null && <p className="page-hint">Success rate: {successRate}% across all accounts and keys.</p>}
+      {serverRunning && successRate !== null && (
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 12 }}>
+            <span className="card-desc">Success rate across all accounts and keys</span>
+            <span className="kpi-value" style={{ fontSize: "1.2em" }}>{successRate}%</span>
+          </div>
+          <SuccessMeter success={data?.totals.success ?? 0} failed={data?.totals.failed ?? 0} />
+        </div>
+      )}
     </div>
   );
 }

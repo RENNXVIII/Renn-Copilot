@@ -2,8 +2,9 @@ import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
 import { useEmailReveal } from "../hooks/useEmailReveal";
-import { KpiCard, HealthRow, TrendChart, Checklist } from "../components/shared";
+import { KpiCard, HealthRow, TrendChart, Checklist, SuccessMeter, ProviderMix } from "../components/shared";
 import { postSyncModels } from "../vscodeApi";
+import { formatNumber } from "../lib/utils";
 
 const TOKEN_USAGE_DAYS = 7;
 
@@ -66,6 +67,12 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
     const totalRequests = (usage?.totals.success ?? 0) + (usage?.totals.failed ?? 0);
     const successRate = totalRequests > 0 ? Math.round(((usage?.totals.success ?? 0) / totalRequests) * 100) : null;
 
+    // Real request-share per provider, summed from live per-account counts.
+    const providerRows = credentials.map((c) => ({ provider: c.provider, requests: c.success + c.failed }));
+
+    // Busiest model over the token window, straight from provider-reported data.
+    const topModel = [...(tokenData?.byProviderModel ?? [])].sort((a, b) => b.total_tokens - a.total_tokens)[0];
+
     const checklist = [
         { label: "Binary installed", done: !!status?.binaryInstalled },
         { label: "Server running", done: serverRunning },
@@ -96,9 +103,20 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
                 />
                 <KpiCard
                     label="Requests (last ~3.3h)"
-                    value={totalRequests ? String(totalRequests) : "-"}
+                    value={totalRequests ? formatNumber(totalRequests) : "-"}
                     hint={successRate !== null ? `${successRate}% success` : "No data yet"}
                     warning={successRate !== null && successRate < 90}
+                    onClick={() => onNavigate("usage")}
+                    footer={
+                        usage && totalRequests > 0 ? (
+                            <SuccessMeter success={usage.totals.success} failed={usage.totals.failed} />
+                        ) : undefined
+                    }
+                />
+                <KpiCard
+                    label="Top model (7d)"
+                    value={topModel ? topModel.model : "-"}
+                    hint={topModel ? `${formatNumber(topModel.total_tokens)} tokens` : serverRunning ? "No usage yet" : "Server isn't running"}
                     onClick={() => onNavigate("usage")}
                 />
             </div>
@@ -142,8 +160,21 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
                             </div>
                         </div>
                         <div>
+                            <div className="card-desc">Process</div>
+                            <div>{status?.running ? (status.pid ? `Running (PID ${status.pid})` : "Running") : "Stopped"}</div>
+                        </div>
+                        <div>
+                            <div className="card-desc">Management API (for tooling)</div>
+                            <div className="mono-ellipsis endpoint-text" title={status?.managementUrl ?? undefined}>
+                                {status?.running ? status?.managementUrl ?? "-" : "-"}
+                            </div>
+                            {status?.running && status?.managementUrl && (
+                                <div className="card-desc">Not a web page - needs a management key. Use the tabs above.</div>
+                            )}
+                        </div>
+                        <div>
                             <div className="card-desc">Last error</div>
-                            <div>{status?.lastStartError ?? "None"}</div>
+                            <div className={status?.lastStartError ? "warning-text" : undefined}>{status?.lastStartError ?? "None"}</div>
                         </div>
                     </div>
                     <div className="btn-row">
@@ -223,6 +254,14 @@ export function Overview({ onNavigate }: { onNavigate: (page: string) => void })
                     )}
                 </div>
             </div>
+
+            {serverRunning && totalRequests > 0 && (
+                <div className="card">
+                    <div className="card-title">Request mix by provider</div>
+                    <div className="card-desc">Share of the last ~3.3h of requests, by upstream provider.</div>
+                    <ProviderMix rows={providerRows} />
+                </div>
+            )}
         </div>
     );
 }

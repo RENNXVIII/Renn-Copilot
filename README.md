@@ -1,162 +1,208 @@
+<div align="center">
+
 # Renn Copilot
 
-Injects Gemini, Anthropic (Claude), OpenAI/Codex, xAI/Grok, and arbitrary
-OpenAI-compatible models into GitHub Copilot Chat in VS Code through
-[CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI). Built-in login flows cover
-Antigravity, Claude web/Claude Code, Codex, and xAI; API-key and custom-provider entries
-are managed from the same dashboard. Gemini CLI/Qwen/iFlow have a caveat described
-under [Known gaps](#known-gaps).
+**Bring your own models to GitHub Copilot Chat — all inside VS Code.**
 
-Everything lives inside a **single, self-contained VS Code extension** — no separate
-terminal, no browser tab, no other process to start by hand:
+Inject Gemini, Claude, OpenAI/Codex, xAI/Grok, and any OpenAI-compatible model
+into Copilot Chat through [CLIProxyAPI](https://github.com/router-for-me/CLIProxyAPI).
+No separate terminal. No browser tab. No extra process to babysit.
 
-| Path | What it is |
+<br/>
+
+[![Version](https://img.shields.io/badge/version-0.7.22-blue)](https://github.com/RENNXVIII/Renn-Copilot)
+[![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.95-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
+[![Local-first](https://img.shields.io/badge/local--first-100%25-brightgreen)](#why-renn-copilot)
+[![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)](LICENSE)
+
+</div>
+
+---
+
+## Why Renn Copilot
+
+- **One extension, zero moving parts.** The backend and dashboard ship *inside*
+  the `.vsix`. Install it and everything else starts itself.
+- **Local-first & private.** The backend runs on your own machine — it is not a
+  public, multi-tenant service.
+- **Plays nice with your config.** It is the *only* thing that touches
+  `chatLanguageModels.json`, and it edits *only* the single entry it owns — it
+  never clobbers models you configured yourself.
+
+## Supported providers
+
+| Provider | Login method |
 |---|---|
-| `src/` | The extension host: commands, status bar, backend lifecycle (spawn/stop), and the dashboard's webview panel + sidebar view. |
-| `backend/` | Node/Express service, vendored inside the extension. Installs and runs the CLIProxyAPI binary, bridges its Management API, polls usage. Spawned automatically by the extension — you never run `npm run dev` for this yourself. |
-| `webview-ui/` | The dashboard itself: a small React app that renders inside a VS Code webview (editor tab or Activity Bar sidebar), styled with VS Code's own theme variables. Talks to `backend/` directly over HTTP. |
+| **Antigravity** (Gemini) | Built-in OAuth |
+| **Claude** (web / Claude Code) | Built-in OAuth |
+| **Codex** (OpenAI) | Built-in OAuth |
+| **xAI / Grok** | Device-code flow (SuperGrok / X Premium+) |
+| **API keys** | Paste and go |
+| **Custom OpenAI-compatible** | Add a base URL + key |
 
-The extension is intentionally the *only* thing that touches `chatLanguageModels.json`,
-and only through reading/writing that one file directly, replacing just the single entry
-it owns — never clobbering anything else you've configured there yourself.
+> Gemini CLI, Qwen, and iFlow have a caveat — see [Known gaps](#known-gaps).
 
-This is a **personal, local-first tool** — the backend runs on your own machine (spawned
-by the extension), not as a public multi-tenant service.
+---
 
-## Dashboard
+## Quick start
 
-- **Command Palette → "Renn Copilot: Open Dashboard"** — the full dashboard as an editor tab:
+1. **Install** the `.vsix` (Extensions panel → **⋯** → *Install from VSIX*).
+   The backend starts automatically; nothing else to install.
+2. **Open the dashboard** — Command Palette → **Renn Copilot: Open Dashboard**,
+   or click the Activity Bar icon.
+3. **Install the binary** — on the *Overview* page, click **Install binary**
+   (use **Update version** later when a newer release ships).
+4. **Log in** — on *Providers & Login*, sign in or paste an API key per provider.
+   Antigravity, Claude, and Codex open their auth pages; xAI shows a device code
+   in the dashboard; custom providers can be added directly.
+5. **Pick models** — on *Models*, toggle what Copilot Chat should see.
+6. **Sync** — models sync on startup, or run
+   **Renn Copilot: Sync Models from Dashboard** any time. Reload VS Code if its
+   model picker doesn't refresh, then enable the Renn Copilot entries under
+   **Manage Models…**.
 
-  | Page | What it does |
-  |---|---|
-  | Overview | Install or update the OS/architecture-specific CLIProxyAPI binary, compare the installed and latest GitHub versions, start/stop/restart it, and view status, setup, health, and token trends. |
-  | Providers & Login | Login to Antigravity, Claude, Codex, or xAI; add API keys and custom OpenAI-compatible providers; manage credential prefixes/groups, stored credentials, enablement, and quota reset. xAI uses a device-code flow for SuperGrok/X Premium+ accounts. |
-  | Models | Toggle which models are exposed to Copilot Chat, per-provider and global enable/disable, search/filter, live vision verification, and manual Vision/No vision overrides. |
-  | Usage | Token usage by provider/model (sortable, filterable, with cost estimate), account health, OAuth/API key usage. |
-  | Logs | Live tail of CLIProxyAPI's own request log and the backend's own process log, with search, copy, and download. |
-  | Config | Raw `config.yaml` editor (hidden by default), routing strategy (round-robin / fill-first), discard/save. |
+> With the default `rennCopilot.requireApiKey: false`, no proxy key is needed. If
+> you enable it, a changed sync copies the generated key to your clipboard —
+> paste it when VS Code prompts for the Renn Copilot Custom Endpoint key.
 
-- **Activity Bar icon** — a compact sidebar (deliberately not a squeezed-down copy of all
-  6 pages): server status with Start/Stop/Restart, a one-line health summary, enabled
-  model count linking straight to the Models page, and quick buttons for Sync Models /
-  Copy API Key / Open Full Dashboard.
+---
 
-## Setup
+## The dashboard
 
-Requires Node.js 18+ only if you're building from source. End users just install the
-`.vsix` (Extensions panel → "..." → Install from VSIX) — the backend's dependencies ship
-inside it, so nothing else needs installing on the machine running VS Code.
+Open it as a full **editor tab** (Command Palette → *Open Dashboard*) or as a
+compact **Activity Bar sidebar**.
 
-Building from source:
+| Page | What it does |
+|---|---|
+| **Overview** | Install/update the CLIProxyAPI binary for your OS, compare installed vs. latest release, start/stop/restart, and watch status, health, and token trends — plus a top-model KPI, a success/fail meter, request mix by provider, and the runtime PID / management endpoint. |
+| **Providers & Login** | Log in to Antigravity, Claude, Codex, or xAI; add API keys and custom providers; manage credential groups, enablement, and quota reset. Header shows connected/inactive credential counts at a glance. |
+| **Models** | Toggle which models reach Copilot Chat — per-provider and global, with search, live vision verification, and manual Vision overrides. Header summarizes enabled/total models across providers. |
+| **Usage** | Token usage by provider/model (sortable, filterable, with cost estimate) plus account and OAuth/API-key health, and a success-rate meter across all credentials. |
+| **Activity** | A live-ish "neuron" view of your models — each one lights up as it's hit, sourced from usage (near-live, typically within ~15s). |
+| **Logs** | Live tail of CLIProxyAPI's request log and the backend's process log, with search, copy, and download. |
+| **Config** | Raw `config.yaml` editor (hidden by default) and routing strategy (round-robin / fill-first). |
 
-```bash
-npm install
-npm install --prefix backend
-npm install --prefix webview-ui
-```
+The **sidebar** is a deliberate, focused summary — server status with
+Start/Stop/Restart, a one-line health line, the enabled-model count, and quick
+buttons for Sync Models / Copy API Key / Open Full Dashboard.
 
-Then, from the repo root:
-
-```bash
-npm run package   # builds the webview, installs backend deps, produces a .vsix via vsce
-```
-
-Install the generated `.vsix` (Extensions panel → "..." → Install from VSIX), or run it
-from source via the VS Code Extension Development Host (press **F5** with this repo
-open as the workspace) while iterating.
+---
 
 ## Settings
 
 | Setting | Default | What it does |
 |---|---|---|
-| `rennCopilot.autoStartBackend` | `true` | Automatically spawn the backend when VS Code starts. Disable to start it manually via **"Renn Copilot: Start Backend"**. |
-| `rennCopilot.autoStartServer` | `true` | Once the backend is up, automatically start the CLIProxyAPI server too (same as clicking "Start" on the Overview page). Only takes effect once the binary has been installed at least once. |
-| `rennCopilot.autoSyncOnStartup` | `true` | Automatically sync enabled models into Copilot's BYOK setting when VS Code starts. |
-| `rennCopilot.backendUrl` | `http://127.0.0.1:4317` | Base URL the extension, webview, and backend agree on. Only change this for advanced setups (e.g. a non-default port). |
-| `rennCopilot.requireApiKey` | `false` | Require VS Code to authenticate to the local proxy with its generated API key. It is off by default because some VS Code builds never show the Custom Endpoint API-key prompt; with the setting off, the local proxy is configured without proxy authentication. Enable it only when your VS Code build prompts for and sends the key. |
+| `rennCopilot.autoStartBackend` | `true` | Spawn the backend when VS Code starts. Turn off to start it manually. |
+| `rennCopilot.autoStartServer` | `true` | Once the backend is up, auto-start the CLIProxyAPI server (like clicking *Start*). Takes effect after the binary is installed once. |
+| `rennCopilot.autoSyncOnStartup` | `true` | Sync enabled models into Copilot's BYOK setting on startup. |
+| `rennCopilot.backendUrl` | `http://127.0.0.1:4317` | Base URL the extension, webview, and backend share. Change only for advanced setups (e.g. a custom port). |
+| `rennCopilot.requireApiKey` | `false` | Require VS Code to authenticate to the local proxy with its generated key. Off by default because some VS Code builds never show the key prompt. Enable only if your build prompts for and sends the key. |
 
 ## Commands
 
-- **Renn Copilot: Open Dashboard** — opens the dashboard as an editor tab (also available via the Activity Bar sidebar icon).
-- **Renn Copilot: Start Backend** / **Stop Backend** — manual control, mainly useful when `autoStartBackend` is off.
-- **Renn Copilot: Sync Models from Dashboard** — re-syncs the enabled model list into Copilot's BYOK setting.
-- **Renn Copilot: Copy API Key to Clipboard** — for pasting into VS Code's "Chat: Manage Language Models" dialog.
-- **Renn Copilot: Show Provider Account Health** — quick-pick breakdown of every stored credential's status.
+| Command | Purpose |
+|---|---|
+| **Open Dashboard** | Open the dashboard as an editor tab. |
+| **Start / Stop Backend** | Manual control (handy when `autoStartBackend` is off). |
+| **Sync Models from Dashboard** | Re-sync the enabled model list into Copilot's BYOK setting. |
+| **Copy API Key to Clipboard** | Paste into VS Code's *Chat: Manage Language Models* dialog. |
+| **Show Provider Account Health** | Quick-pick status of every stored credential. |
 
-## Typical flow
-
-1. Install the extension. The backend (and, by default, the CLIProxyAPI server once its binary is installed) starts automatically.
-2. Open the dashboard (Command Palette or Activity Bar icon). On first run, click **Install binary** on the Overview page. Later, use **Update version** when a newer GitHub release is available.
-3. On Providers & Login, log in or add an API key for each provider you use. Antigravity, Claude, and Codex open their authorization pages; xAI opens a device-code approval page and shows the code in the dashboard. Custom OpenAI-compatible providers can be added directly.
-4. On Models, toggle which models should be exposed to Copilot Chat.
-5. Models sync on startup by default, or run **Renn Copilot: Sync Models from Dashboard** manually. Reload VS Code if its model picker does not refresh, then open **Manage Models...** and click the eye icon next to the Renn Copilot entries you want visible.
-6. With the default `rennCopilot.requireApiKey: false`, no proxy key is required. If you enable that setting, a changed sync copies the generated key to your clipboard; paste it when VS Code prompts for the Renn Copilot Custom Endpoint key.
+---
 
 ## Vision capability detection
 
-Renn Copilot does not maintain a supposedly complete global list of vision
-models. Such lists become stale quickly and cannot reliably describe arbitrary
-OpenAI-compatible custom providers. It instead resolves image-input support in
-this order:
+Renn Copilot doesn't ship a "complete" global list of vision models — such lists
+go stale fast and can't describe arbitrary custom providers. Instead it resolves
+image-input support in order:
 
 1. A per-model **Vision / No vision** manual override.
-2. A successful live verification request that asks the model to identify a
-  visual property of a small test image.
-3. Curated metadata for the small set of built-in models known by this project.
-4. **Unknown** for every other model.
+2. A successful **live verification** — asks the model to identify a property of
+   a small test image.
+3. **Curated metadata** for the handful of built-in models this project knows.
+4. **Unknown** for everything else.
 
-The Models page polls model availability without sending chat requests. A live
-vision verification is sent only when you click the re-check button or enable a
-model whose support is still unknown. It consumes a small amount of real
-provider quota. Authentication, rate-limit, quota, timeout, and upstream errors
-remain **Unknown** rather than being misclassified as **No vision**.
+The Models page checks availability *without* sending chat requests. A live
+vision check runs only when you click re-check or enable a model whose support
+is still unknown — it uses a small amount of real quota. Auth, rate-limit,
+quota, timeout, and upstream errors stay **Unknown** rather than being
+mislabeled **No vision**.
 
-Each verification has a 30-second deadline. When several newly enabled models
-need verification, requests are processed with bounded concurrency rather than
-as an unbounded burst.
+Each check has a 30-second deadline and runs with bounded concurrency. Models
+still marked Unknown are exported with `vision: false`; image attachments turn on
+only after positive evidence or an explicit override. For a custom provider,
+leave the selector on **Auto**, or pick **Vision** / **No vision** when its docs
+are definitive.
 
-For a custom provider, leave the selector on **Auto** to use live verification,
-or choose **Vision** / **No vision** when the provider's documentation gives a
-definitive answer. Models still marked Unknown are exported to VS Code with
-`vision: false`; image attachments are enabled only after positive evidence or
-an explicit override.
+---
+
+## Building from source
+
+Requires **Node.js 18+**.
+
+```bash
+# install dependencies (root, backend, webview)
+npm install
+npm install --prefix backend
+npm install --prefix webview-ui
+
+# build the .vsix (webview build + backend deps + vsce package)
+npm run package
+```
+
+Install the generated `.vsix`, or press **F5** with this repo open to run it in
+the VS Code Extension Development Host while iterating.
+
+### Tests
+
+```bash
+npm test --prefix backend       # backend capability / provider / migration tests
+npm test --prefix webview-ui    # webview pure-util tests (e.g. Activity graph)
+npm run compile                 # type-check the extension host
+npm run webview:build           # build the dashboard
+```
+
+Run `npm audit` independently in the root, `backend/`, and `webview-ui/`.
+
+---
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `src/` | The extension host — commands, status bar, backend lifecycle, and the dashboard's webview panel + sidebar. |
+| `backend/` | A vendored Node/Express service. Installs and runs the CLIProxyAPI binary, bridges its Management API, and polls usage. Spawned automatically. |
+| `webview-ui/` | The dashboard — a small React app rendered inside a VS Code webview, styled with VS Code theme variables, talking to `backend/` over HTTP. |
+
+---
 
 ## Troubleshooting
 
-- **Logs page shows nothing for the "CLIProxyAPI" tab, with `Management API GET /logs
-  failed: 400 logging to file disabled` in the backend's console.** Harmless — CLIProxyAPI
-  itself has request-logging-to-file turned off in its `config.yaml`. Either ignore it (the
-  Backend tab on the same page still shows our own process log), or enable it via the
-  dashboard's Config page by adding a `logging-to-file: true` key and saving.
-- **A Claude-family model rejects deprecated sampling parameters such as
-  `temperature`, `top_p`, or `top_k`.** CLIProxyAPI now normalizes these parameters for
-  Claude-family requests upstream (stripping `temperature`/`top_p`, plus `top_k` when
-  extended thinking is active) before forwarding to Anthropic, so no extra handling is
-  needed on the extension side. Ensure the backend is running and re-sync the affected
-  model so its endpoint is current.
+<details>
+<summary><strong>Logs page is empty for the "CLIProxyAPI" tab</strong> (<code>400 logging to file disabled</code>)</summary>
+
+Harmless — CLIProxyAPI has request-logging-to-file turned off in its
+`config.yaml`. Either ignore it (the *Backend* tab still shows our own log), or
+enable it via the *Config* page by adding `logging-to-file: true` and saving.
+</details>
+
+<details>
+<summary><strong>A Claude model rejects <code>temperature</code> / <code>top_p</code> / <code>top_k</code></strong></summary>
+
+CLIProxyAPI now normalizes these for Claude-family requests upstream (stripping
+`temperature`/`top_p`, plus `top_k` when extended thinking is active) before
+forwarding to Anthropic — no extra handling needed here. Make sure the backend
+is running and re-sync the affected model so its endpoint is current.
+</details>
+
+---
 
 ## Known gaps
 
-- **Gemini CLI / Qwen / iFlow OAuth**: CLIProxyAPI's Management API exposes ready-made
-  OAuth URL endpoints for Antigravity, Anthropic, and Codex, while Renn Copilot separately
-  implements xAI's device-code CLI flow. Gemini CLI, Qwen, and iFlow still require
-  CLIProxyAPI's own CLI `--login` flags on the machine running the backend; those flows are
-  not wired into the dashboard yet.
-- Custom OpenAI-compatible providers vary in model metadata and error behavior. When a
-  provider does not expose definitive vision metadata, use live verification or a manual
-  override on the Models page.
-
-## Validation and tests
-
-The backend includes automated Node tests for model capability evidence, provider-scoped
-keys, legacy migration, custom-provider attribution, and fallback model export. The main
-validation commands are:
-
-```bash
-npm test --prefix backend
-npm run compile
-npm run webview:build
-```
-
-Dependency audits can be run independently in the repository root, `backend/`, and
-`webview-ui/` with `npm audit`.
+- **Gemini CLI / Qwen / iFlow OAuth** aren't wired into the dashboard yet.
+  CLIProxyAPI exposes ready-made OAuth endpoints for Antigravity, Anthropic, and
+  Codex (and Renn Copilot implements xAI's device-code flow), but these three
+  still need CLIProxyAPI's own CLI `--login` flags on the backend machine.
+- **Custom OpenAI-compatible providers** vary in metadata and error behavior.
+  When a provider doesn't expose definitive vision metadata, use live
+  verification or a manual override on the Models page.

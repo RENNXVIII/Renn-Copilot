@@ -255,6 +255,85 @@ button.btn:disabled {
   color: var(--vscode-descriptionForeground);
 }
 
+.meter {
+  display: flex;
+  height: 4px;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--vscode-panel-border);
+}
+
+.meter-fill.ok {
+  background: var(--vscode-testing-iconPassed, #4caf50);
+}
+
+.meter-fill.bad {
+  background: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.provider-mix {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mix-bar {
+  display: flex;
+  height: 10px;
+  width: 100%;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--vscode-panel-border);
+}
+
+.mix-seg {
+  height: 100%;
+}
+
+.mix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  font-size: 0.85em;
+}
+
+.mix-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-transform: capitalize;
+}
+
+.mix-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.mono-ellipsis {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Read-only endpoint string: muted, non-underlined, default cursor so it
+   never reads as a clickable link. */
+.endpoint-text {
+  color: var(--vscode-descriptionForeground);
+  text-decoration: none;
+  cursor: default;
+  -webkit-user-select: all;
+  user-select: all;
+}
+
+.warning-text {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
 .tabs {
   display: flex;
   gap: 6px;
@@ -485,6 +564,61 @@ button.cowork-toggle-row:disabled {
   border-top: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 25%, transparent);
 }
 
+/* Collapsible provider note: a one-line summary keeps cards clean, with the
+   full explanation available on demand. */
+.provider-note {
+  font-size: 0.85em;
+}
+
+.provider-note > summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  padding: 2px 0;
+}
+
+.provider-note > summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-note > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  font-size: 0.85em;
+  transition: transform 0.12s ease;
+}
+
+.provider-note[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.provider-note > summary:hover {
+  color: var(--vscode-textLink-foreground);
+}
+
+.provider-note > .card-desc {
+  margin-top: 4px;
+}
+
+.provider-note-summary {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.cowork-risk-details {
+  margin: 0 12px 10px;
+  padding-top: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 25%, transparent);
+}
+
+.cowork-risk-details > summary {
+  color: var(--vscode-errorForeground);
+}
+
+.cowork-risk-details > .card-desc {
+  color: var(--vscode-errorForeground);
+}
+
 .cowork-error-banner {
   margin: 0 12px 10px;
   color: var(--vscode-errorForeground);
@@ -494,7 +628,7 @@ button.cowork-toggle-row:disabled {
   background: color-mix(in srgb, var(--vscode-errorForeground) 10%, transparent);
 }
 
-/* Cowork confirm modal — airy, scannable, not a wall of text */
+/* Cowork confirm modal - airy, scannable, not a wall of text */
 .cowork-modal {
   display: flex;
   flex-direction: column;
@@ -926,4 +1060,142 @@ textarea.config-editor.blurred {
 .strategy-option.selected {
   border-color: var(--vscode-focusBorder);
   background: var(--vscode-toolbar-hoverBackground);
+}
+
+/* --- Neuron Activity page -------------------------------------------------- */
+
+.neuron-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.neuron-stage {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 260px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  background:
+    radial-gradient(120% 120% at 50% 50%, rgba(120, 140, 200, 0.06), transparent 70%),
+    var(--vscode-editor-background);
+  overflow: hidden;
+}
+
+.neuron-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.neuron-paused {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  font-size: 0.78em;
+  color: var(--vscode-descriptionForeground);
+  background: var(--vscode-badge-background);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+
+.neuron-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+
+.neuron-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.neuron-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.neuron-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.neuron-feed {
+  border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 10px;
+}
+
+.neuron-feed-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.85em;
+}
+
+.neuron-feed-model {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+
+.neuron-feed-age {
+  margin-left: auto;
+}
+
+.neuron-feed-account {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.neuron-tooltip {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 8px 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+  color: var(--vscode-editorHoverWidget-foreground, var(--vscode-foreground));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 0.82em;
+}
+
+.neuron-tooltip-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-weight: 600;
+}
+
+.neuron-tooltip-sub {
+  color: var(--vscode-descriptionForeground);
+  margin: 1px 0 6px;
+}
+
+.neuron-tooltip-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 12px;
+}
+
+.neuron-tooltip-grid > span:nth-child(odd) {
+  color: var(--vscode-descriptionForeground);
+}
+
+.neuron-tooltip-grid > span:nth-child(even) {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }

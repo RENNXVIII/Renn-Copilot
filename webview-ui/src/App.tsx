@@ -3,6 +3,7 @@ import { Overview } from "./pages/Overview";
 import { Models } from "./pages/Models";
 import { Providers } from "./pages/Providers";
 import { Usage } from "./pages/Usage";
+import { Neuron } from "./pages/Neuron";
 import { Logs } from "./pages/Logs";
 import { Config } from "./pages/Config";
 
@@ -11,6 +12,7 @@ const PAGES = [
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "usage", label: "Usage" },
+  { id: "neuron", label: "Activity" },
   { id: "logs", label: "Logs" },
   { id: "config", label: "Config" },
 ] as const;
@@ -56,6 +58,7 @@ export function App() {
       {page === "providers" && <Providers />}
       {page === "models" && <Models />}
       {page === "usage" && <Usage />}
+      {page === "neuron" && <Neuron />}
       {page === "logs" && <Logs />}
       {page === "config" && <Config />}
     </>

@@ -22,7 +22,10 @@ const PROVIDER_CARDS: {
   isXai?: boolean;
   oauthDisabled?: boolean;
   oauthDisabledReason?: string;
-  note?: string;
+  // A short one-line summary shown by default, with the full explanation
+  // tucked into a collapsible <details> so cards stay clean but nothing is
+  // lost. `detail` is optional when the summary already says enough.
+  note?: { summary: string; detail?: string };
 }[] = [
   {
     id: "antigravity",
@@ -35,10 +38,13 @@ const PROVIDER_CARDS: {
     label: "Claude / Claude Code",
     description: "Login with your Claude.ai / Claude Code account (Anthropic OAuth).",
     apiKey: { label: "Claude API Key", getter: api.getClaudeKeys, setter: api.setClaudeKeys },
-    note:
-      'Anthropic now bills third-party OAuth usage as "extra usage" instead of plan quota: "Third-party apps now draw ' +
-      'from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going." Add extra ' +
-      "usage credit at claude.ai/settings/usage, or use \"Add via API key\" for separate (non-plan) billing instead.",
+    note: {
+      summary: 'OAuth usage now bills as "extra usage", not plan quota.',
+      detail:
+        'Anthropic now bills third-party OAuth usage as "extra usage" instead of plan quota: "Third-party apps now ' +
+        'draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going." Add ' +
+        'extra usage credit at claude.ai/settings/usage, or use "Add via API key" for separate (non-plan) billing instead.',
+    },
   },
   {
     id: "codex",
@@ -51,9 +57,12 @@ const PROVIDER_CARDS: {
     label: "xAI (Grok)",
     description: "Login with your SuperGrok / X Premium+ account, or add a raw xAI API key.",
     isXai: true,
-    note:
-      "xAI login uses a device code, not a browser redirect: after clicking, a page opens where you approve the " +
-      "code shown below (it's usually pre-filled from the link). This can take up to a few minutes to complete.",
+    note: {
+      summary: "Login uses a device code, not a browser redirect.",
+      detail:
+        "After clicking, a page opens where you approve the code shown below (it's usually pre-filled from the " +
+        "link). This can take up to a few minutes to complete.",
+    },
   },
 ];
 
@@ -595,6 +604,17 @@ export function Providers() {
         <p className="page-hint">
           Connect each provider via OAuth, or add a raw API key instead. Tokens and keys are stored by CLIProxyAPI under its auth directory.
         </p>
+        {serverRunning && (() => {
+          const totalCreds = allGroups.reduce((sum, g) => sum + countForGroup(g.id), 0);
+          const disabledOAuth = data?.files?.filter((f) => f.disabled).length ?? 0;
+          if (totalCreds === 0) return null;
+          return (
+            <p className="page-hint">
+              <strong>{totalCreds}</strong> credential{totalCreds === 1 ? "" : "s"} connected
+              {disabledOAuth > 0 ? `, ${disabledOAuth} inactive` : ""}.
+            </p>
+          );
+        })()}
       </div>
 
       {!serverRunning && <div className="empty-hint">CLIProxyAPI isn't running yet, so login can't reach its Management API. Go to Overview and click Start first.</div>}
@@ -612,11 +632,15 @@ export function Providers() {
               </div>
               <div className="card-desc">{p.description}</div>
               {p.oauthDisabled && <p className="card-desc">{p.oauthDisabledReason}</p>}
-              {p.note && (
-                <p className="card-desc" style={{ color: "var(--vscode-editorWarning-foreground, #cca700)" }}>
-                  {p.note}
-                </p>
-              )}
+              {p.note &&
+                (p.note.detail ? (
+                  <details className="provider-note">
+                    <summary>{p.note.summary}</summary>
+                    <p className="card-desc">{p.note.detail}</p>
+                  </details>
+                ) : (
+                  <p className="card-desc provider-note-summary">{p.note.summary}</p>
+                ))}
               {p.id === "claude" && (
                 <div
                   className={`cowork-toggle-card${coworkSwitchOn ? " is-on" : ""}${coworkConfirmOpen ? " is-pending" : ""}`}
@@ -634,8 +658,7 @@ export function Providers() {
                         {claudeCoworkMode && <span className="badge neutral cowork-badge">On · own risk</span>}
                       </div>
                       <div className="card-desc">
-                        Route Claude chat with a Cowork/agent fingerprint and remap VS Code tools to
-                        Claude Code names (unmapped tools are dropped). Off by default.
+                        Route Claude chat with a Cowork/agent fingerprint. Off by default.
                       </div>
                     </div>
                     <span
@@ -646,10 +669,14 @@ export function Providers() {
                     />
                   </button>
                   {claudeCoworkMode && (
-                    <p className="card-desc cowork-risk-banner">
-                      Unofficial fingerprinting + tool remap may affect TOS, billing, account health,
-                      or agent capabilities. Not a guarantee of plan-limit billing.
-                    </p>
+                    <details className="provider-note cowork-risk-details">
+                      <summary>Risks and details</summary>
+                      <p className="card-desc">
+                        Remaps VS Code tools to Claude Code names (unmapped tools are dropped).
+                        Unofficial fingerprinting + tool remap may affect TOS, billing, account
+                        health, or agent capabilities. Not a guarantee of plan-limit billing.
+                      </p>
+                    </details>
                   )}
                   {coworkSaveError && (
                     <p className="card-desc cowork-error-banner" role="alert">
@@ -660,7 +687,7 @@ export function Providers() {
               )}
               {isBanned ? (
                 <p className="card-desc" style={{ color: "var(--vscode-errorForeground)" }}>
-                  Rate-limited by the provider — retry in {formatRemaining(banDeadline - now)}
+                  Rate-limited by the provider - retry in {formatRemaining(banDeadline - now)}
                 </p>
               ) : (
                 state === "error" && (
@@ -715,7 +742,7 @@ export function Providers() {
       </div>
 
       <div className="empty-hint">
-        Gemini CLI, Qwen, and iFlow don't expose an OAuth URL through CLIProxyAPI's Management API yet — authenticate those via the CLIProxyAPI CLI directly, then
+        Gemini CLI, Qwen, and iFlow don't expose an OAuth URL through CLIProxyAPI's Management API yet - authenticate those via the CLIProxyAPI CLI directly, then
         they'll show up below.
       </div>
 
@@ -826,7 +853,7 @@ export function Providers() {
               Not now
             </button>
             <button className="btn btn-danger" disabled={savingCowork} onClick={() => void applyClaudeCoworkMode(true)}>
-              {savingCowork ? "Enabling..." : "I understand — enable"}
+              {savingCowork ? "Enabling..." : "I understand - enable"}
             </button>
           </div>
         </div>
