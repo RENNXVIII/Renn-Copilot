@@ -97,6 +97,16 @@ function formatRemaining(ms: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+// Filters OAuth accounts by identity (email/name/prefix) for the "Stored
+// credentials" panel -- useful once a provider has many accounts. Matches the
+// unmasked email even while emails are visually masked, so search still works
+// without revealing them.
+function matchesCredSearch(f: AuthFileEntry, term: string): boolean {
+  const q = term.trim().toLowerCase();
+  if (!q) return true;
+  return [f.email, f.name, f.label, f.prefix].some((v) => (v || "").toLowerCase().includes(q));
+}
+
 export function Providers() {
   const { data: status } = usePolling(api.getStatus, 4000);
   const serverRunning = status?.running ?? false;
@@ -110,6 +120,7 @@ export function Providers() {
   const [xaiModalOpen, setXaiModalOpen] = useState(false);
   const [customModalOpen, setCustomModalOpen] = useState(false);
   const [selectedGroup, setSelectedGroup] = useState("antigravity");
+  const [credSearch, setCredSearch] = useState("");
   const [customGroups, setCustomGroups] = useState<Record<string, string>>({});
   const [resetting, setResetting] = useState<Record<string, boolean>>({});
   const [restarting, setRestarting] = useState(false);
@@ -433,7 +444,8 @@ export function Providers() {
   function renderGroupRows() {
     const isFixed = FIXED_PROVIDER_IDS.includes(selectedGroup as FixedProviderId);
     if (isFixed) {
-      const oauthAccounts = data?.files?.filter((f) => f.provider === selectedGroup) ?? [];
+      const oauthAccounts =
+        data?.files?.filter((f) => f.provider === selectedGroup && matchesCredSearch(f, credSearch)) ?? [];
 
       // xAI has no dedicated Management API key list -- its "keys" live in one
       // shared openai-compatibility entry instead (see routes.js's
@@ -445,7 +457,11 @@ export function Providers() {
         const empty = !oauthAccounts.length && !keyEntries.length;
         return (
           <>
-            {empty && <p className="card-desc">No credentials in this group yet.</p>}
+            {empty && (
+              <p className="card-desc">
+                {credSearch.trim() ? "No accounts match your search." : "No credentials in this group yet."}
+              </p>
+            )}
             {oauthAccounts.length > 1 && (
               <div className="btn-row" style={{ justifyContent: "flex-end" }}>
                 <button className="btn secondary" disabled={oauthAccounts.every((f) => !f.disabled)} onClick={() => bulkSetOAuthDisabled(oauthAccounts, false)}>
@@ -483,7 +499,11 @@ export function Providers() {
       const empty = !oauthAccounts.length && !keyItems.length;
       return (
         <>
-          {empty && <p className="card-desc">No credentials in this group yet.</p>}
+          {empty && (
+            <p className="card-desc">
+              {credSearch.trim() ? "No accounts match your search." : "No credentials in this group yet."}
+            </p>
+          )}
           {oauthAccounts.length > 1 && (
             <div className="btn-row" style={{ justifyContent: "flex-end" }}>
               <button className="btn secondary" disabled={oauthAccounts.every((f) => !f.disabled)} onClick={() => bulkSetOAuthDisabled(oauthAccounts, false)}>
@@ -722,13 +742,34 @@ export function Providers() {
         <div className="credentials-panel">
           <div className="credentials-sidebar">
             {allGroups.map((g) => (
-              <button key={g.id} className={selectedGroup === g.id ? "active" : ""} onClick={() => setSelectedGroup(g.id)} title={g.label}>
+              <button
+                key={g.id}
+                className={selectedGroup === g.id ? "active" : ""}
+                onClick={() => {
+                  setSelectedGroup(g.id);
+                  setCredSearch("");
+                }}
+                title={g.label}
+              >
                 <span>{g.label}</span>
                 <span>{countForGroup(g.id)}</span>
               </button>
             ))}
           </div>
-          <div className="credentials-body">{renderGroupRows()}</div>
+          <div className="credentials-body">
+            {FIXED_PROVIDER_IDS.includes(selectedGroup as FixedProviderId) && (
+              <div style={{ marginBottom: 10 }}>
+                <input
+                  className="text-input"
+                  style={{ width: "100%" }}
+                  placeholder="Filter accounts by email, name, or prefix..."
+                  value={credSearch}
+                  onChange={(e) => setCredSearch(e.target.value)}
+                />
+              </div>
+            )}
+            {renderGroupRows()}
+          </div>
         </div>
       </div>
 

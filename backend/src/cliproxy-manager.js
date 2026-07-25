@@ -644,23 +644,66 @@ const XAI_LOGIN_TIMEOUT_MS = 31 * 60 * 1000;
 const XAI_LOGIN_URL_RE = /(https:\/\/accounts\.x\.ai\/oauth2\/device\?user_code=\S+)/;
 const XAI_LOGIN_CODE_RE = /enter this code:\s*(\S+)/i;
 // The CLI's -xai-login (CLIProxyAPI internal/cmd/xai_login.go's DoXAILogin)
-// only logs "xAI authentication failed: <err>" and returns on failure -- it
-// never os.Exit(1)s -- so the child still exits 0 even when nothing was
-// saved. Detecting success by exit code alone reports a false "ok" and the
-// dashboard shows the login worked while no credential ever lands in
-// auth-dir. Match the process's own success/failure markers instead: it
-// prints "Authentication saved to <path>" then "xAI authentication
-// successful!" only after the token store actually persisted the credential.
-const XAI_LOGIN_SUCCESS_RE = /xAI authentication successful!/i;
-const XAI_LOGIN_SAVED_RE = /Authentication saved to\s+(.+)/i;
+// logs "xAI authentication failed: <err>" (via logrus) on failure and prints
+// "xAI authentication successful!" to stdout on success. Neither is a reliable
+// success signal: the process exits 0 either way, and the final stdout flush
+// often races the exit event so the success line never lands in `buffered`.
+// The only ground truth is whether a credential file actually appeared (or was
+// overwritten) in auth-dir -- that's what we key success on. This regexp is
+// only used to surface the *reason* a login was rejected, from main.log.
 const XAI_LOGIN_FAILED_RE = /xAI authentication failed:\s*(.+)/i;
+
+// Resolves auth-dir from config.yaml when present (it may be an absolute path),
+// falling back to the default under cliproxyHome. Both the credential files and
+// the CLI's logs/main.log live under this directory.
+function authDirPath() {
+    try {
+        if (fs.existsSync(configPath())) {
+            // Avoid a full yaml parse for a single key; match the live value.
+            const raw = fs.readFileSync(configPath(), "utf8");
+            const match = raw.match(/^\s*auth-dir:\s*["']?([^"'#\n]+?)["']?\s*(?:#.*)?$/m);
+            if (match?.[1]) {
+                const p = match[1].trim();
+                if (p) return path.isAbsolute(p) ? p : path.resolve(settings.cliproxyHome, p);
+            }
+        }
+    } catch {
+        // fall through to default
+    }
+    return path.join(settings.cliproxyHome, "auths");
+}
+
+// Snapshot of auth-dir credential files ({name, size, mtimeMs}), used to detect
+// whether a login actually persisted a credential. Skips the logs subdir and
+// dotfiles; token contents are never read.
+function listAuthDirSnapshot() {
+    const dir = authDirPath();
+    try {
+        if (!fs.existsSync(dir)) return { dir, exists: false, files: [] };
+        const files = fs
+            .readdirSync(dir)
+            .filter((name) => !name.startsWith(".") && name !== "logs")
+            .map((name) => {
+                try {
+                    const st = fs.statSync(path.join(dir, name));
+                    return st.isFile() ? { name, size: st.size, mtimeMs: st.mtimeMs } : null;
+                } catch {
+                    return null;
+                }
+            })
+            .filter(Boolean);
+        return { dir, exists: true, files };
+    } catch (err) {
+        return { dir, exists: false, error: err.message, files: [] };
+    }
+}
 
 // With `logging-to-file: true`, the CLI writes logrus output (including the
 // real "xAI authentication failed: ..." line) to <auth-dir>/logs/main.log
 // instead of stdout/stderr. These helpers let startXaiLogin() recover that
 // message so the dashboard surfaces the actual reason a login was rejected.
 function xaiLogFilePath() {
-    return path.join(settings.cliproxyHome, "auths", "logs", "main.log");
+    return path.join(authDirPath(), "logs", "main.log");
 }
 
 function xaiLogFileSize() {
@@ -719,6 +762,13 @@ export function startXaiLogin() {
         // only ever see the child exit 0 with no marker and mislabel it as a
         // generic "authorization not completed".
         const logStartOffset = xaiLogFileSize();
+        // Snapshot auth-dir before spawning so the exit handler can tell whether
+        // a credential file was actually written (new file) or overwritten by a
+        // re-login (same name, changed size/mtime) -- the only reliable proof of
+        // success, since the CLI exits 0 regardless of outcome.
+        const beforeSnap = listAuthDirSnapshot();
+        const beforeMeta = Object.fromEntries(beforeSnap.files.map((f) => [f.name, f]));
+
         const child = spawn(binaryPath(), ["-config", configPath(), "-xai-login", "-no-browser"], {
             cwd: settings.cliproxyHome,
             stdio: ["ignore", "pipe", "pipe"],
@@ -754,16 +804,25 @@ export function startXaiLogin() {
 
         child.on("exit", (code) => {
             clearTimeout(safetyTimer);
-            // Exit code is unreliable here (see XAI_LOGIN_* comment above): the CLI
-            // exits 0 even when it only logged "xAI authentication failed". Trust
-            // the process's own markers -- an explicit failure line always wins,
-            // otherwise require positive proof a credential was actually saved.
-            const failedMatch = buffered.match(XAI_LOGIN_FAILED_RE);
-            const savedMatch = buffered.match(XAI_LOGIN_SAVED_RE);
-            const succeeded = !failedMatch && (XAI_LOGIN_SUCCESS_RE.test(buffered) || !!savedMatch);
+            // Success is decided by the disk, not by stdout markers or exit code
+            // (the CLI exits 0 whether it saved a credential or only logged a
+            // failure). Compare auth-dir against the pre-spawn snapshot: a new
+            // credential file, or an existing one whose size/mtime changed (a
+            // re-login overwrite of the same account), is the only proof a
+            // credential was actually persisted.
+            const afterSnap = listAuthDirSnapshot();
+            const beforeNames = new Set(beforeSnap.files.map((f) => f.name));
+            const newFiles = afterSnap.files.filter((f) => !beforeNames.has(f.name));
+            const changedFiles = afterSnap.files.filter((f) => {
+                const prev = beforeMeta[f.name];
+                return prev && (prev.mtimeMs !== f.mtimeMs || prev.size !== f.size);
+            });
+            const persisted = newFiles.length > 0 || changedFiles.length > 0;
 
-            if (succeeded) {
+            if (persisted) {
                 entry.status = "ok";
+                const written = [...newFiles, ...changedFiles].map((f) => f.name).join(", ");
+                pushLog(`[xai-login] credential persisted: ${written}`);
                 // The standalone login process wrote the new auth file to disk, but
                 // the already-running server only reads auth-dir at startup -- it
                 // won't see the new xAI credential in GET /auth-files until it
@@ -774,13 +833,13 @@ export function startXaiLogin() {
                 }
             } else {
                 entry.status = "error";
-                // Prefer the real reason logged by the CLI. It usually only
-                // appears in main.log (logging-to-file), e.g.
-                // "xAI authentication failed: xai: xai device token error:
-                // invalid_grant: Access denied" -- which tells the user the
-                // grant was rejected (often an account without xAI API
-                // access), not that they simply didn't finish authorizing.
-                const loggedError = failedMatch ? failedMatch[1].trim() : readXaiLoginError(logStartOffset);
+                // No file changed -- surface the real reason the grant was
+                // rejected. It usually only appears in main.log (logging-to-file),
+                // e.g. "xAI authentication failed: xai: xai device token error:
+                // invalid_grant: Access denied" -- which tells the user the grant
+                // was rejected (often an account without xAI API access), not that
+                // they simply didn't finish authorizing.
+                const loggedError = readXaiLoginError(logStartOffset);
                 if (loggedError) {
                     entry.error = `xAI authentication failed: ${loggedError}`;
                 } else if (code !== 0) {
