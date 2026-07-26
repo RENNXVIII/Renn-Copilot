@@ -81,6 +81,14 @@ export interface RtkAdapters {
   addToUserPath(dir: string): Promise<boolean>;
   /** Removes a directory from the persistent user PATH. Returns true if it changed. */
   removeFromUserPath(dir: string): Promise<boolean>;
+  /**
+   * Registers a hook-file location so VS Code's Copilot Chat agent loads it.
+   * VS Code's default `chat.hookFilesLocations` does not include `~/.copilot/hooks`,
+   * so the global RTK hook is ignored by Chat until this is set. No-op outside VS Code.
+   */
+  registerHookLocation?(location: string): Promise<void>;
+  /** Unregisters a previously registered hook-file location. No-op outside VS Code. */
+  unregisterHookLocation?(location: string): Promise<void>;
 }
 
 // ── Status types (surfaced to the webview) ──────────────────────────────────
@@ -266,6 +274,17 @@ export class RtkManagerCore {
     const envHome = process.env.COPILOT_HOME;
     if (envHome && envHome.trim()) return envHome;
     return path.join(this.a.homeDir, ".copilot");
+  }
+
+  /**
+   * The value used as a key in VS Code's `chat.hookFilesLocations`. VS Code
+   * expands a leading `~/`, so we prefer that tilde form for the default home;
+   * a custom COPILOT_HOME is registered by its absolute directory instead.
+   */
+  private copilotHookLocation(): string {
+    const envHome = process.env.COPILOT_HOME;
+    if (envHome && envHome.trim()) return path.join(envHome, "hooks");
+    return "~/.copilot/hooks";
   }
 
   private scopeStatus(scope: RtkScope, workspaceDir?: string): RtkScopeStatus {
@@ -520,6 +539,13 @@ export class RtkManagerCore {
       if (info?.source === "managed") {
         await this.pinHookToBinary(scope, info.path, workspaceDir);
       }
+      // VS Code's Copilot Chat agent only reads a fixed set of hook locations by
+      // default, and `~/.copilot/hooks` is NOT one of them -- so the global hook
+      // is invisible to Chat until we register it. (Workspace hooks live in
+      // `.github/hooks`, which Chat already loads by default.)
+      if (scope === "global" && this.a.registerHookLocation) {
+        await this.a.registerHookLocation(this.copilotHookLocation());
+      }
     });
   }
 
@@ -581,11 +607,17 @@ export class RtkManagerCore {
       if (!info) {
         const { hookPath } = this.scopeStatus(scope, workspaceDir);
         if (hookPath) await fsp.rm(hookPath, { force: true });
+        if (scope === "global" && this.a.unregisterHookLocation) {
+          await this.a.unregisterHookLocation(this.copilotHookLocation());
+        }
         return;
       }
       const result = await this.runOperation("uninstall", scope, workspaceDir);
       if (result.exitCode !== 0) {
         throw new Error(`rtk uninstall failed: ${result.stderr || result.stdout}`.trim());
+      }
+      if (scope === "global" && this.a.unregisterHookLocation) {
+        await this.a.unregisterHookLocation(this.copilotHookLocation());
       }
     });
   }
@@ -832,6 +864,31 @@ async function realRemoveFromUserPath(dir: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Adds/removes a hook-file location in VS Code's global `chat.hookFilesLocations`
+ * so the Copilot Chat agent loads (or stops loading) the RTK hook there. VS Code
+ * merges this map with its built-in defaults, so we only ever touch our own key.
+ */
+async function setHookLocationEnabled(location: string, enabled: boolean): Promise<void> {
+  // Loaded lazily so this module stays importable in `node --test` (no vscode).
+  const vscode = require("vscode") as typeof import("vscode");
+  const config = vscode.workspace.getConfiguration("chat");
+  const current = config.get<Record<string, boolean>>("hookFilesLocations") ?? {};
+  if (enabled) {
+    if (current[location] === true) return;
+    await config.update(
+      "hookFilesLocations",
+      { ...current, [location]: true },
+      vscode.ConfigurationTarget.Global
+    );
+    return;
+  }
+  if (!(location in current)) return;
+  const next = { ...current };
+  delete next[location];
+  await config.update("hookFilesLocations", next, vscode.ConfigurationTarget.Global);
+}
+
 /** Builds an RtkManagerCore wired to real OS adapters for the given storage dir. */
 export function createRtkManager(context: vscode.ExtensionContext): RtkManagerCore {
   const storageDir = context.globalStorageUri.fsPath;
@@ -848,5 +905,7 @@ export function createRtkManager(context: vscode.ExtensionContext): RtkManagerCo
     extract: realExtract,
     addToUserPath: realAddToUserPath,
     removeFromUserPath: realRemoveFromUserPath,
+    registerHookLocation: (location) => setHookLocationEnabled(location, true),
+    unregisterHookLocation: (location) => setHookLocationEnabled(location, false),
   });
 }
