@@ -36,8 +36,6 @@ interface Recorder {
   runs: { file: string; args: string[]; cwd?: string }[];
   addedPaths: string[];
   removedPaths: string[];
-  registeredHookLocations: string[];
-  unregisteredHookLocations: string[];
 }
 
 interface FakeConfig {
@@ -73,13 +71,7 @@ async function makeManager(cfg: FakeConfig = {}): Promise<{
   const arch = cfg.arch ?? "x64";
   const latestVersion = cfg.latestVersion ?? "1.2.3";
   const binaryName = rtkBinaryName(platform);
-  const rec: Recorder = {
-    runs: [],
-    addedPaths: [],
-    removedPaths: [],
-    registeredHookLocations: [],
-    unregisteredHookLocations: [],
-  };
+  const rec: Recorder = { runs: [], addedPaths: [], removedPaths: [] };
 
   // The bytes the fake download writes; sha256 of this is the "correct" digest.
   const assetBytes = Buffer.from("rtk-binary-payload");
@@ -154,11 +146,9 @@ async function makeManager(cfg: FakeConfig = {}): Promise<{
       rec.removedPaths.push(dir);
       return true;
     },
-    async registerHookLocation(location) {
-      rec.registeredHookLocations.push(location);
-    },
-    async unregisterHookLocation(location) {
-      rec.unregisteredHookLocations.push(location);
+    async prepareHookBridge() {},
+    hookCommand(binaryPath) {
+      return `renn-rtk-hook "${binaryPath}"`;
     },
   };
 
@@ -225,7 +215,7 @@ test("a workspace operation without a workspace dir is rejected", async () => {
   await assert.rejects(() => core.setup("workspace"), /workspace folder is required/);
 });
 
-test("setup pins the global hook to the managed binary's absolute path without double-escaping", async () => {
+test("setup routes the global hook through the Renn compatibility bridge", async () => {
   let hookFile = "";
   const { core, homeDir, storageDir } = await makeManager({
     // When `rtk init` runs, emulate the real CLI writing a bare-`rtk` hook file.
@@ -261,43 +251,15 @@ test("setup pins the global hook to the managed binary's absolute path without d
   const parsed = JSON.parse(raw) as {
     hooks: { PreToolUse: { command: string }[]; preToolUse: { bash: string; powershell: string }[] };
   };
-  // The manager defaults to the "linux" platform in tests, so the managed
-  // binary name has no .exe suffix regardless of the host running the test.
   const managedBinary = path.join(storageDir, "bin", rtkBinaryName("linux"));
-  // The pinned command points at the managed binary by absolute path...
-  assert.equal(parsed.hooks.PreToolUse[0].command, `${managedBinary} hook copilot`);
-  assert.equal(parsed.hooks.preToolUse[0].bash, `${managedBinary} hook copilot`);
-  assert.equal(parsed.hooks.preToolUse[0].powershell, `${managedBinary} hook copilot`);
-  // ...and no command starts with a bare `rtk` token anymore.
+  const expected = `renn-rtk-hook "${managedBinary}"`;
+  assert.equal(parsed.hooks.PreToolUse[0].command, expected);
+  assert.equal(parsed.hooks.preToolUse[0].bash, expected);
+  assert.equal(parsed.hooks.preToolUse[0].powershell, expected);
   assert.doesNotMatch(parsed.hooks.PreToolUse[0].command, /^rtk\b/);
   // Guard against the double-escaping regression: a quadruple backslash in the
   // raw file text means a Windows path was escaped twice and is now corrupt.
   assert.ok(!raw.includes("\\\\\\\\"), "hook file must not contain double-escaped backslashes");
-});
-
-test("setup registers ~/.copilot/hooks in VS Code so Copilot Chat loads the global hook", async () => {
-  const { core, rec } = await makeManager();
-  await core.ensureBinary();
-  await core.setup("global");
-  // Without this, VS Code's Copilot Chat agent never reads the global hook,
-  // because `~/.copilot/hooks` is not one of its built-in default locations.
-  assert.deepEqual(rec.registeredHookLocations, ["~/.copilot/hooks"]);
-});
-
-test("workspace setup does not touch VS Code hook locations (.github/hooks is a default)", async () => {
-  const { core, rec } = await makeManager();
-  const workspaceDir = path.join(os.tmpdir(), `rtk-ws-${Date.now()}`);
-  await fsp.mkdir(workspaceDir, { recursive: true });
-  await core.ensureBinary();
-  await core.setup("workspace", workspaceDir);
-  assert.deepEqual(rec.registeredHookLocations, []);
-});
-
-test("uninstall unregisters the global hook location", async () => {
-  const { core, rec } = await makeManager();
-  await core.ensureBinary();
-  await core.uninstall("global");
-  assert.deepEqual(rec.unregisteredHookLocations, ["~/.copilot/hooks"]);
 });
 
 test("uninstall uses the official fixed `rtk init --uninstall` command", async () => {

@@ -81,14 +81,10 @@ export interface RtkAdapters {
   addToUserPath(dir: string): Promise<boolean>;
   /** Removes a directory from the persistent user PATH. Returns true if it changed. */
   removeFromUserPath(dir: string): Promise<boolean>;
-  /**
-   * Registers a hook-file location so VS Code's Copilot Chat agent loads it.
-   * VS Code's default `chat.hookFilesLocations` does not include `~/.copilot/hooks`,
-   * so the global RTK hook is ignored by Chat until this is set. No-op outside VS Code.
-   */
-  registerHookLocation?(location: string): Promise<void>;
-  /** Unregisters a previously registered hook-file location. No-op outside VS Code. */
-  unregisterHookLocation?(location: string): Promise<void>;
+  /** Copies/updates the compatibility bridge at its stable managed location. */
+  prepareHookBridge(): Promise<void>;
+  /** Builds the shell command used by the Copilot hook compatibility bridge. */
+  hookCommand(binaryPath: string): string;
 }
 
 // ── Status types (surfaced to the webview) ──────────────────────────────────
@@ -274,17 +270,6 @@ export class RtkManagerCore {
     const envHome = process.env.COPILOT_HOME;
     if (envHome && envHome.trim()) return envHome;
     return path.join(this.a.homeDir, ".copilot");
-  }
-
-  /**
-   * The value used as a key in VS Code's `chat.hookFilesLocations`. VS Code
-   * expands a leading `~/`, so we prefer that tilde form for the default home;
-   * a custom COPILOT_HOME is registered by its absolute directory instead.
-   */
-  private copilotHookLocation(): string {
-    const envHome = process.env.COPILOT_HOME;
-    if (envHome && envHome.trim()) return path.join(envHome, "hooks");
-    return "~/.copilot/hooks";
   }
 
   private scopeStatus(scope: RtkScope, workspaceDir?: string): RtkScopeStatus {
@@ -531,20 +516,14 @@ export class RtkManagerCore {
       if (result.exitCode !== 0) {
         throw new Error(`rtk init failed: ${result.stderr || result.stdout}`.trim());
       }
-      // `rtk init` writes a hook that invokes the bare command `rtk`, which only
-      // works if `rtk` is resolvable on Copilot's PATH. When we own a managed
-      // binary, rewrite the hook to call it by absolute path so the integration
-      // works immediately -- no PATH entry, and no VS Code restart, required.
+      // Route the generated hook through Renn's compatibility bridge. Current
+      // VS Code builds call the terminal tool `run_in_terminal`, which RTK 0.43
+      // does not recognize. The bridge translates that name and pins rewritten
+      // commands to this exact binary, avoiding PATH/restart dependencies.
       const { info } = await this.resolveBinary();
-      if (info?.source === "managed") {
-        await this.pinHookToBinary(scope, info.path, workspaceDir);
-      }
-      // VS Code's Copilot Chat agent only reads a fixed set of hook locations by
-      // default, and `~/.copilot/hooks` is NOT one of them -- so the global hook
-      // is invisible to Chat until we register it. (Workspace hooks live in
-      // `.github/hooks`, which Chat already loads by default.)
-      if (scope === "global" && this.a.registerHookLocation) {
-        await this.a.registerHookLocation(this.copilotHookLocation());
+      if (info) {
+        await this.a.prepareHookBridge();
+        await this.installHookBridge(scope, info.path, workspaceDir);
       }
     });
   }
@@ -554,7 +533,7 @@ export class RtkManagerCore {
    * managed binary's absolute path instead of the bare `rtk` command. This is
    * idempotent and only touches the leading `rtk` token of each command string.
    */
-  private async pinHookToBinary(scope: RtkScope, binaryPath: string, workspaceDir?: string): Promise<void> {
+  private async installHookBridge(scope: RtkScope, binaryPath: string, workspaceDir?: string): Promise<void> {
     const { hookPath } = this.scopeStatus(scope, workspaceDir);
     if (!hookPath) return;
     let raw: string;
@@ -569,15 +548,15 @@ export class RtkManagerCore {
     } catch {
       return;
     }
-    // Use the raw path here: these are in-memory JS strings, and the final
-    // JSON.stringify below applies the (single) escaping. Pre-escaping would
-    // double-escape backslashes and corrupt the Windows path in the hook file.
+    const bridgeCommand = this.a.hookCommand(binaryPath);
     let changed = false;
     const rewriteCommand = (value: unknown): unknown => {
       if (typeof value !== "string") return value;
-      // Replace only a leading bare `rtk` / `rtk.exe` token; leave anything that
-      // already points at an absolute path untouched (idempotent re-runs).
-      const next = value.replace(/^(\s*)rtk(\.exe)?(\s|$)/i, `$1${binaryPath}$3`);
+      // Replace only RTK's generated hook invocation. Other hooks sharing this
+      // JSON structure are left untouched.
+      const next = /(?:^|[\\/"'])rtk(?:\.exe)?\s+hook\s+copilot\s*$/i.test(value.trim())
+        ? bridgeCommand
+        : value;
       if (next !== value) changed = true;
       return next;
     };
@@ -607,17 +586,11 @@ export class RtkManagerCore {
       if (!info) {
         const { hookPath } = this.scopeStatus(scope, workspaceDir);
         if (hookPath) await fsp.rm(hookPath, { force: true });
-        if (scope === "global" && this.a.unregisterHookLocation) {
-          await this.a.unregisterHookLocation(this.copilotHookLocation());
-        }
         return;
       }
       const result = await this.runOperation("uninstall", scope, workspaceDir);
       if (result.exitCode !== 0) {
         throw new Error(`rtk uninstall failed: ${result.stderr || result.stdout}`.trim());
-      }
-      if (scope === "global" && this.a.unregisterHookLocation) {
-        await this.a.unregisterHookLocation(this.copilotHookLocation());
       }
     });
   }
@@ -864,34 +837,13 @@ async function realRemoveFromUserPath(dir: string): Promise<boolean> {
   return true;
 }
 
-/**
- * Adds/removes a hook-file location in VS Code's global `chat.hookFilesLocations`
- * so the Copilot Chat agent loads (or stops loading) the RTK hook there. VS Code
- * merges this map with its built-in defaults, so we only ever touch our own key.
- */
-async function setHookLocationEnabled(location: string, enabled: boolean): Promise<void> {
-  // Loaded lazily so this module stays importable in `node --test` (no vscode).
-  const vscode = require("vscode") as typeof import("vscode");
-  const config = vscode.workspace.getConfiguration("chat");
-  const current = config.get<Record<string, boolean>>("hookFilesLocations") ?? {};
-  if (enabled) {
-    if (current[location] === true) return;
-    await config.update(
-      "hookFilesLocations",
-      { ...current, [location]: true },
-      vscode.ConfigurationTarget.Global
-    );
-    return;
-  }
-  if (!(location in current)) return;
-  const next = { ...current };
-  delete next[location];
-  await config.update("hookFilesLocations", next, vscode.ConfigurationTarget.Global);
-}
-
 /** Builds an RtkManagerCore wired to real OS adapters for the given storage dir. */
 export function createRtkManager(context: vscode.ExtensionContext): RtkManagerCore {
   const storageDir = context.globalStorageUri.fsPath;
+  const bundledHookBridgePath = path.join(__dirname, "rtk-hook.js");
+  const managedHookBridgePath = path.join(storageDir, "rtk-hook.js");
+  const quotePowerShell = (value: string): string => `'${value.replace(/'/g, "''")}'`;
+  const quotePosix = (value: string): string => `'${value.replace(/'/g, `'"'"'`)}'`;
   return new RtkManagerCore({
     platform: process.platform,
     arch: process.arch,
@@ -905,7 +857,16 @@ export function createRtkManager(context: vscode.ExtensionContext): RtkManagerCo
     extract: realExtract,
     addToUserPath: realAddToUserPath,
     removeFromUserPath: realRemoveFromUserPath,
-    registerHookLocation: (location) => setHookLocationEnabled(location, true),
-    unregisterHookLocation: (location) => setHookLocationEnabled(location, false),
+    prepareHookBridge: async () => {
+      await fsp.mkdir(storageDir, { recursive: true });
+      await fsp.copyFile(bundledHookBridgePath, managedHookBridgePath);
+    },
+    hookCommand: (binaryPath) => {
+      if (process.platform === "win32") {
+        const script = `$env:ELECTRON_RUN_AS_NODE='1'; & ${quotePowerShell(process.execPath)} ${quotePowerShell(managedHookBridgePath)} ${quotePowerShell(binaryPath)}`;
+        return `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command ${quotePowerShell(script)}`;
+      }
+      return `/usr/bin/env ELECTRON_RUN_AS_NODE=1 ${quotePosix(process.execPath)} ${quotePosix(managedHookBridgePath)} ${quotePosix(binaryPath)}`;
+    },
   });
 }
