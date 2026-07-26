@@ -107,6 +107,43 @@ buttons for Sync Models / Copy API Key / Open Full Dashboard.
 | **Sync Models from Dashboard** | Re-sync the enabled model list into Copilot's BYOK setting. |
 | **Copy API Key to Clipboard** | Paste into VS Code's *Chat: Manage Language Models* dialog. |
 | **Show Provider Account Health** | Quick-pick status of every stored credential. |
+| **Enable / Remove RTK for Copilot (Global / Workspace)** | Wire (or unwire) the RTK token-saving hook for GitHub Copilot. |
+
+---
+
+## RTK — token savings for GitHub Copilot
+
+[RTK (Rust Token Killer)](https://github.com/rtk-ai/rtk) is a short-lived CLI
+that GitHub Copilot invokes through its official *PreToolUse* hooks to rewrite
+tool/bash output before it reaches the model, cutting token usage. It is **not**
+a daemon or a network proxy — there is no server to start or stop. RTK is
+distributed under Apache-2.0; Renn only downloads official release binaries and
+runs the official `rtk init` / `rtk gain` commands.
+
+Open the **RTK** page in the dashboard to enable it in one click.
+
+- **Platforms.** Managed binaries are provided for Windows x64, macOS
+  (x64 / arm64), and Linux (x64 / arm64). Other combinations (e.g. Windows arm64)
+  show an *unsupported platform* notice since RTK ships no official build.
+- **What Renn installs.** A managed `rtk` binary under the extension's global
+  storage, verified against the release `checksums.txt` (SHA-256) and validated
+  before use. Archive entries are checked for path-traversal before extraction.
+- **PATH ownership.** Copilot's generated hook calls `rtk` by name, so the binary
+  must be resolvable on `PATH`. On **Windows**, Renn adds its managed bin folder
+  to your **user** `PATH` (a VS Code restart is then required). On **macOS/Linux**,
+  Renn creates a `~/.local/bin/rtk` symlink it owns — it never edits your shell
+  profiles and never overwrites an existing non-Renn file there.
+- **Scopes.** *Global* wires Copilot everywhere (`rtk init --global --copilot`);
+  *Workspace* wires only the current, trusted workspace (`rtk init --copilot`).
+- **Conflicts.** If a different executable named `rtk` is already on `PATH`,
+  Renn uses/reports it but never modifies it.
+- **Uninstall.** *Disable* runs the official `rtk init --uninstall` to remove the
+  Copilot hook and instructions. *Delete managed binary* removes only the binary
+  Renn installed and the PATH entry / symlink Renn created — a user- or
+  package-manager-installed `rtk` is never touched.
+- **Analytics caveat.** The savings percentages come from `rtk gain` and reflect
+  reduction in the tool/bash output RTK processed — **not** your Copilot billing
+  or subscription usage.
 
 ---
 

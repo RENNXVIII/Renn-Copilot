@@ -163,6 +163,11 @@ button.btn:disabled {
   color: var(--vscode-descriptionForeground);
 }
 
+.badge.warning {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+  border-color: currentColor;
+}
+
 .checklist-item {
   display: flex;
   align-items: center;
@@ -1198,4 +1203,181 @@ textarea.config-editor.blurred {
 .neuron-tooltip-grid > span:nth-child(even) {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+/* ── RTK page ────────────────────────────────────────────────────────────── */
+
+.rtk-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  background: var(--vscode-sideBar-background, transparent);
+}
+
+.rtk-banner.warn {
+  border-left-color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+.rtk-banner.error {
+  border-left-color: var(--vscode-testing-iconFailed, #f14c4c);
+}
+
+.rtk-banner.ok {
+  border-left-color: var(--vscode-testing-iconPassed, #4caf50);
+}
+
+.rtk-banner-icon {
+  flex-shrink: 0;
+  font-size: 1.1em;
+  line-height: 1.3;
+}
+
+.rtk-banner-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.rtk-banner-title {
+  font-weight: 600;
+}
+
+.rtk-banner-desc {
+  font-size: 0.85em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.rtk-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+
+@media (max-width: 620px) {
+  .rtk-hero {
+    grid-template-columns: 1fr;
+  }
+}
+
+.rtk-kpi-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 16px;
+}
+
+.rtk-kpi-label {
+  font-size: 0.78em;
+  color: var(--vscode-descriptionForeground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rtk-kpi-value {
+  font-size: 1.5em;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+
+.rtk-kpi-value.accent {
+  color: var(--vscode-charts-green, #4caf50);
+}
+
+.rtk-kpi-sub {
+  font-size: 0.75em;
+  color: var(--vscode-descriptionForeground);
+}
+
+.rtk-chart-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.rtk-seg {
+  display: inline-flex;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.rtk-seg button {
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  border: none;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 0.78em;
+}
+
+.rtk-seg button.active {
+  background: var(--vscode-toolbar-activeBackground, var(--vscode-toolbar-hoverBackground));
+  color: var(--vscode-foreground);
+}
+
+.rtk-seg button:hover:not(.active) {
+  color: var(--vscode-foreground);
+}
+
+.rtk-chart {
+  width: 100%;
+  height: 120px;
+  display: block;
+}
+
+.rtk-chart-empty {
+  height: 120px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+  border: 1px dashed var(--vscode-panel-border);
+  border-radius: 6px;
+}
+
+.rtk-chart-legend {
+  display: flex;
+  gap: 14px;
+  font-size: 0.75em;
+  color: var(--vscode-descriptionForeground);
+  flex-wrap: wrap;
+}
+
+.rtk-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.rtk-legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.rtk-meta-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 14px;
+  font-size: 0.85em;
+  align-items: baseline;
+}
+
+.rtk-meta-grid dt {
+  color: var(--vscode-descriptionForeground);
+  margin: 0;
+}
+
+.rtk-meta-grid dd {
+  margin: 0;
+  min-width: 0;
+  word-break: break-all;
 }

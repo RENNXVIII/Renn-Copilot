@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { getWebviewHtml } from "./webview-html";
 import { openDashboardPanel } from "./webview-panel";
+import { getRtkDispatcher } from "./extension";
 
 export const SIDEBAR_VIEW_ID = "rennCopilot.sidebarView";
 
@@ -23,6 +24,10 @@ export class RennSidebarViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = getWebviewHtml(webviewView.webview, this.context.extensionUri, backendUrl, "sidebar");
 
     webviewView.webview.onDidReceiveMessage((message: any) => {
+      if (message?.command === "rtk") {
+        void getRtkDispatcher()?.handle(message, webviewView.webview);
+        return;
+      }
       switch (message?.command) {
         case "openDashboardPanel":
           openDashboardPanel(this.context, message.page);

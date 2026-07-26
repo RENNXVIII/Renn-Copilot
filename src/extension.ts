@@ -7,6 +7,9 @@ import * as os from "node:os";
 import * as backendManager from "./backend-manager";
 import { openDashboardPanel } from "./webview-panel";
 import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
+import { createRtkManager, RtkManagerCore } from "./rtk-manager";
+import { RtkWebviewDispatcher } from "./rtk-webview";
+import type { RtkScope } from "./rtk-core";
 import {
   PROVIDER_NAME,
   maskEmail,
@@ -135,8 +138,23 @@ interface ServerStatus {
 // CLIProxyAPI version and flag when a newer one is available.
 let lastServerStatus: ServerStatus | undefined;
 
+// The RTK (Rust Token Killer) integration for GitHub Copilot. The manager owns
+// every side effect (managed binary, PATH, official `rtk init`/`gain`); the
+// dispatcher is the single validated entry point both webviews route RTK
+// messages through. RTK is a short-lived CLI hook, not a daemon -- it is
+// deliberately kept out of the backend start/stop lifecycle below.
+let rtkManager: RtkManagerCore | undefined;
+let rtkDispatcher: RtkWebviewDispatcher | undefined;
+
+export function getRtkDispatcher(): RtkWebviewDispatcher | undefined {
+  return rtkDispatcher;
+}
+
 export function activate(context: vscode.ExtensionContext) {
   extensionContext = context;
+
+  rtkManager = createRtkManager(context);
+  rtkDispatcher = new RtkWebviewDispatcher(rtkManager);
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = "rennCopilot.syncModels";
   statusBarItem.text = "$(sync) Renn Copilot";
@@ -174,6 +192,21 @@ export function activate(context: vscode.ExtensionContext) {
   );
   context.subscriptions.push(
     vscode.commands.registerCommand("rennCopilot.openDashboardPanel", () => openDashboardPanel(context))
+  );
+
+  // RTK commands mirror the webview actions so they're also reachable from the
+  // Command Palette. Each routes through the same manager the dispatcher uses.
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.rtkSetupWorkspace", () => runRtkCommand("setup", "workspace"))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.rtkSetupGlobal", () => runRtkCommand("setup", "global"))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.rtkUninstallWorkspace", () => runRtkCommand("uninstall", "workspace"))
+  );
+  context.subscriptions.push(
+    vscode.commands.registerCommand("rennCopilot.rtkUninstallGlobal", () => runRtkCommand("uninstall", "global"))
   );
 
   context.subscriptions.push(
@@ -274,6 +307,26 @@ async function waitForBackendReady(backendUrl: string, timeoutMs = 15000): Promi
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
   }
+}
+
+/**
+ * Runs an RTK setup/uninstall action from the Command Palette by routing it
+ * through the same dispatcher the webview uses (confirmations, workspace/trust
+ * checks, and error handling all live there). The response is surfaced as a
+ * notification since there's no webview to receive it here.
+ */
+async function runRtkCommand(action: "setup" | "uninstall", scope: RtkScope) {
+  const dispatcher = rtkDispatcher;
+  if (!dispatcher) return;
+  const requestId = `cmd-${Date.now()}`;
+  await dispatcher.handle({ command: "rtk", requestId, action, scope }, {
+    postMessage: (response) => {
+      if (!response.ok && response.error) {
+        void vscode.window.showErrorMessage(`Renn Copilot: ${response.error}`);
+      }
+      return Promise.resolve(true);
+    },
+  });
 }
 
 async function startBackendCommand(context: vscode.ExtensionContext) {

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import { getWebviewHtml } from "./webview-html";
+import { getRtkDispatcher } from "./extension";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
@@ -28,7 +29,12 @@ export function openDashboardPanel(context: vscode.ExtensionContext, initialPage
 
   currentPanel.webview.html = getWebviewHtml(currentPanel.webview, context.extensionUri, backendUrl, "panel", initialPage);
 
+  const panel = currentPanel;
   currentPanel.webview.onDidReceiveMessage((message: any) => {
+    if (message?.command === "rtk") {
+      void getRtkDispatcher()?.handle(message, panel.webview);
+      return;
+    }
     // A plain window.open() inside a webview doesn't reliably reach the
     // user's real browser (Electron sandboxing) -- OAuth login buttons
     // route through here instead so vscode.env.openExternal can do it properly.

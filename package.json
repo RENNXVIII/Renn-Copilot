@@ -2,7 +2,7 @@
   "name": "renn-copilot",
   "displayName": "Renn Copilot",
   "description": "Self-contained CLIProxyAPI dashboard + BYOK model sync for GitHub Copilot Chat, entirely inside VS Code -- no separate terminal or browser tab needed.",
-  "version": "0.7.22",
+  "version": "0.8.2",
   "publisher": "RENNXVIII",
   "icon": "media/icon.png",
   "repository": {
@@ -45,6 +45,22 @@
         "command": "rennCopilot.openDashboardPanel",
         "title": "Renn Copilot: Open Dashboard",
         "icon": "$(dashboard)"
+      },
+      {
+        "command": "rennCopilot.rtkSetupGlobal",
+        "title": "Renn Copilot: Enable RTK for Copilot (Global)"
+      },
+      {
+        "command": "rennCopilot.rtkSetupWorkspace",
+        "title": "Renn Copilot: Enable RTK for Copilot (Workspace)"
+      },
+      {
+        "command": "rennCopilot.rtkUninstallGlobal",
+        "title": "Renn Copilot: Remove RTK from Copilot (Global)"
+      },
+      {
+        "command": "rennCopilot.rtkUninstallWorkspace",
+        "title": "Renn Copilot: Remove RTK from Copilot (Workspace)"
       }
     ],
     "viewsContainers": {
@@ -117,10 +133,14 @@
     "webview:build": "cd webview-ui && npm run build",
     "package": "npm run backend:install && npm run webview:install && npm run webview:build && vsce package"
   },
+  "dependencies": {
+    "extract-zip": "^2.0.1",
+    "tar": "^7.5.22"
+  },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^22.20.1",
     "@types/vscode": "^1.95.0",
-    "typescript": "^5.6.0",
-    "@vscode/vsce": "^3.2.1"
+    "@vscode/vsce": "^3.2.1",
+    "typescript": "^5.6.0"
   }
 }

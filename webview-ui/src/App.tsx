@@ -6,12 +6,14 @@ import { Usage } from "./pages/Usage";
 import { Neuron } from "./pages/Neuron";
 import { Logs } from "./pages/Logs";
 import { Config } from "./pages/Config";
+import { Rtk } from "./pages/Rtk";
 
 const PAGES = [
   { id: "overview", label: "Overview" },
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "usage", label: "Usage" },
+  { id: "rtk", label: "RTK" },
   { id: "neuron", label: "Activity" },
   { id: "logs", label: "Logs" },
   { id: "config", label: "Config" },
@@ -58,6 +60,7 @@ export function App() {
       {page === "providers" && <Providers />}
       {page === "models" && <Models />}
       {page === "usage" && <Usage />}
+      {page === "rtk" && <Rtk />}
       {page === "neuron" && <Neuron />}
       {page === "logs" && <Logs />}
       {page === "config" && <Config />}
