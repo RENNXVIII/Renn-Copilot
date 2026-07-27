@@ -245,7 +245,17 @@ export class RtkManagerCore {
     if (pathBinary) {
       const version = await this.validateRtkBinary(pathBinary);
       if (version) {
-        return { info: { source: "path", path: pathBinary, version, pathReady: true }, conflictPath: null };
+        // After VS Code restarts, the Renn-managed bin directory is visible on
+        // PATH and `which` resolves the managed binary itself. Preserve its
+        // ownership here; otherwise ensureBinary() treats it as user-owned and
+        // returns early, making the "Update binary" button a no-op.
+        const manifest = await this.readManifest();
+        const isManaged =
+          !!manifest && path.resolve(pathBinary).toLowerCase() === path.resolve(manifest.binaryPath).toLowerCase();
+        return {
+          info: { source: isManaged ? "managed" : "path", path: pathBinary, version, pathReady: true },
+          conflictPath: null,
+        };
       }
       // Same name, wrong distribution.
       const managed = await this.resolveManaged();
@@ -439,7 +449,7 @@ export class RtkManagerCore {
       const stagingBinary = `${finalBinary}.new`;
       await fsp.copyFile(extractedBinary, stagingBinary);
       if (this.a.platform !== "win32") await fsp.chmod(stagingBinary, 0o755);
-      await fsp.rename(stagingBinary, finalBinary);
+      await replaceFile(stagingBinary, finalBinary);
 
       const prev = await this.readManifest();
       await this.writeManifest({
@@ -660,6 +670,27 @@ async function findFileRecursive(dir: string, fileName: string): Promise<string 
     }
   }
   return null;
+}
+
+/**
+ * Replaces an active file without relying on POSIX rename-overwrite semantics.
+ * Windows rejects rename(new, existing), so keep a temporary backup and
+ * restore it if activation fails.
+ */
+async function replaceFile(stagingPath: string, finalPath: string): Promise<void> {
+  const backupPath = `${finalPath}.old`;
+  const hadExisting = fs.existsSync(finalPath);
+  await fsp.rm(backupPath, { force: true });
+  if (hadExisting) await fsp.rename(finalPath, backupPath);
+  try {
+    await fsp.rename(stagingPath, finalPath);
+    await fsp.rm(backupPath, { force: true });
+  } catch (err) {
+    if (hadExisting && !fs.existsSync(finalPath)) {
+      await fsp.rename(backupPath, finalPath).catch(() => undefined);
+    }
+    throw err;
+  }
 }
 
 // ── Real adapters ───────────────────────────────────────────────────────────

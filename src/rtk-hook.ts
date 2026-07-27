@@ -1,25 +1,48 @@
 // Compatibility bridge between VS Code Copilot Chat hooks and upstream RTK.
 //
-// VS Code currently emits the terminal tool as `run_in_terminal`, while RTK
-// 0.43 recognizes `runTerminalCommand`/`bash`. This process translates only
-// that tool name, delegates all rewrite decisions to RTK, then pins RTK's
-// rewritten command to the exact binary selected by Renn.
+// VS Code emits the terminal tool under a name that has drifted across builds
+// (`run_in_terminal`, `runInTerminal`, ...), while RTK 0.43 only recognizes
+// `runTerminalCommand`/`bash`. This process translates any of those terminal
+// tool names, delegates all rewrite decisions to RTK, then pins RTK's rewritten
+// command to the exact binary selected by Renn.
 
 import { spawn } from "node:child_process";
 
 const MAX_HOOK_OUTPUT_BYTES = 1_000_000;
 
+/** The tool name upstream RTK recognizes as "run a terminal command". */
+const RTK_TERMINAL_TOOL = "runTerminalCommand";
+
 type JsonObject = Record<string, unknown>;
+
+/**
+ * True for any VS Code Copilot terminal-tool name. VS Code has shipped this
+ * tool as `run_in_terminal` and (in newer agent builds) `runInTerminal`; both
+ * separator styles are matched here so RTK always sees a name it understands.
+ */
+function isTerminalToolName(name: unknown): boolean {
+  if (typeof name !== "string") return false;
+  const normalized = name.replace(/[_-]/g, "").toLowerCase();
+  return normalized === "runinterminal" || normalized === "runterminalcommand";
+}
 
 export function normalizeCopilotHookInput(input: unknown): unknown {
   if (!input || typeof input !== "object" || Array.isArray(input)) return input;
   const obj = input as JsonObject;
-  if (obj.tool_name !== "run_in_terminal") return input;
-  return { ...obj, tool_name: "runTerminalCommand" };
+  if (!isTerminalToolName(obj.tool_name)) return input;
+  if (obj.tool_name === RTK_TERMINAL_TOOL) return input;
+  return { ...obj, tool_name: RTK_TERMINAL_TOOL };
 }
 
-function quoteShellArgument(value: string, platform: NodeJS.Platform): string {
-  if (platform === "win32") return `"${value.replace(/"/g, '""')}"`;
+/**
+ * Renders `value` as a leading command token that a shell will execute as a
+ * program path. On Windows the integrated terminal is PowerShell, where a
+ * double-quoted path at the start of a line is parsed as a *string literal*,
+ * not a command -- it must be invoked with the call operator (`& "..."`).
+ * POSIX shells execute a single-quoted path directly, so no operator is added.
+ */
+function quoteCommandToken(value: string, platform: NodeJS.Platform): string {
+  if (platform === "win32") return `& "${value.replace(/"/g, '""')}"`;
   return `'${value.replace(/'/g, `'"'"'`)}'`;
 }
 
@@ -45,7 +68,7 @@ export function pinRtkHookOutput(
   if (typeof command !== "string") return output;
   const pinned = command.replace(
     /^(\s*)rtk(\.exe)?(\s|$)/i,
-    `$1${quoteShellArgument(binaryPath, platform)}$3`
+    `$1${quoteCommandToken(binaryPath, platform)}$3`
   );
   if (pinned === command) return output;
   (updatedInput as JsonObject).command = pinned;
