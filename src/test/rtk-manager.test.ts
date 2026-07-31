@@ -204,6 +204,34 @@ test("ensureBinary updates a managed binary after it becomes visible on PATH", a
   assert.equal(updatedManifest.version, "2.0.0");
 });
 
+test("a stale Windows backup does not block a managed binary update", async () => {
+  let reportedVersion = "1.0.0";
+  const setup = await makeManager({
+    platform: "win32",
+    arch: "x64",
+    latestVersion: "2.0.0",
+    runHandler: (_file, args) => {
+      if (args[0] === "--version") return { stdout: `rtk ${reportedVersion}`, stderr: "", exitCode: 0 };
+      if (args[0] === "gain") return { stdout: VALID_GAIN, stderr: "", exitCode: 0 };
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    },
+  });
+
+  await setup.core.ensureBinary();
+  const manifestPath = path.join(setup.storageDir, "rtk-manifest.json");
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { binaryPath: string; version: string };
+  manifest.version = "1.0.0";
+  await fsp.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+  await fsp.writeFile(`${manifest.binaryPath}.old`, "stale locked-backup placeholder");
+
+  reportedVersion = "2.0.0";
+  const updated = await setup.core.ensureBinary();
+  const updatedManifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { version: string };
+  assert.equal(updated.version, "2.0.0");
+  assert.equal(updatedManifest.version, "2.0.0");
+  assert.equal(fs.existsSync(`${manifest.binaryPath}.old`), true);
+});
+
 test("a same-named wrong-distribution binary on PATH is reported as a conflict", async () => {
   const { core } = await makeManager({
     whichResult: "/usr/bin/rtk",
@@ -378,8 +406,7 @@ test("getStatus reports unsupported platforms clearly", async () => {
   assert.match(status.warning ?? "", /No official RTK release/);
 });
 
-test("getStatus flags an available update", async () => {
-  // An older binary on PATH against a newer latest release.
+test("getStatus does not advertise a managed update for a user-owned PATH binary", async () => {
   const { core } = await makeManager({
     whichResult: "/usr/bin/rtk",
     latestVersion: "2.0.0",
@@ -390,6 +417,29 @@ test("getStatus flags an available update", async () => {
   });
   const status = await core.getStatus("/ws");
   assert.equal(status.binary?.version, "1.0.0");
+  assert.equal(status.binary?.source, "path");
+  assert.equal(status.updateAvailable, false);
+});
+
+test("getStatus flags an available update for a managed binary", async () => {
+  let reportedVersion = "1.0.0";
+  const setup = await makeManager({
+    latestVersion: "2.0.0",
+    runHandler: (_file, args) => {
+      if (args[0] === "--version") return { stdout: `rtk ${reportedVersion}`, stderr: "", exitCode: 0 };
+      if (args[0] === "gain") return { stdout: VALID_GAIN, stderr: "", exitCode: 0 };
+      return { stdout: "ok", stderr: "", exitCode: 0 };
+    },
+  });
+  await setup.core.ensureBinary();
+  const manifestPath = path.join(setup.storageDir, "rtk-manifest.json");
+  const manifest = JSON.parse(await fsp.readFile(manifestPath, "utf8")) as { version: string };
+  manifest.version = "1.0.0";
+  await fsp.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+  reportedVersion = "1.0.0";
+
+  const status = await setup.core.getStatus("/ws");
+  assert.equal(status.binary?.source, "managed");
   assert.equal(status.updateAvailable, true);
 });
 

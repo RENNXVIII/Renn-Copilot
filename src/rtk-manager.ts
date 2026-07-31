@@ -341,7 +341,10 @@ export class RtkManagerCore {
 
     const { info, conflictPath } = await this.resolveBinary();
     const latestVersion = await this.getLatestVersion();
-    const updateAvailable = !!info && !!latestVersion && isVersionOlder(info.version, latestVersion);
+    // Renn can only replace binaries it owns. A user/package-manager binary on
+    // PATH may be outdated, but advertising an update here would make the
+    // button a no-op because ensureBinary() intentionally leaves it untouched.
+    const updateAvailable = info?.source === "managed" && !!latestVersion && isVersionOlder(info.version, latestVersion);
     const workspace = this.scopeStatus("workspace", workspaceDir);
     const global = this.scopeStatus("global");
 
@@ -678,19 +681,24 @@ async function findFileRecursive(dir: string, fileName: string): Promise<string 
  * restore it if activation fails.
  */
 async function replaceFile(stagingPath: string, finalPath: string): Promise<void> {
-  const backupPath = `${finalPath}.old`;
+  // Use a unique backup name. Antivirus/indexing processes on Windows can keep
+  // a previously activated .exe backup open briefly; a fixed `.old` path then
+  // makes every later update fail before activation even starts.
+  const backupPath = `${finalPath}.old-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString("hex")}`;
   const hadExisting = fs.existsSync(finalPath);
-  await fsp.rm(backupPath, { force: true });
   if (hadExisting) await fsp.rename(finalPath, backupPath);
   try {
     await fsp.rename(stagingPath, finalPath);
-    await fsp.rm(backupPath, { force: true });
   } catch (err) {
     if (hadExisting && !fs.existsSync(finalPath)) {
       await fsp.rename(backupPath, finalPath).catch(() => undefined);
     }
     throw err;
   }
+
+  // Activation already succeeded. Failure to delete a locked backup must not
+  // report the whole update as failed or prevent the manifest from advancing.
+  if (hadExisting) await fsp.rm(backupPath, { force: true }).catch(() => undefined);
 }
 
 // ── Real adapters ───────────────────────────────────────────────────────────

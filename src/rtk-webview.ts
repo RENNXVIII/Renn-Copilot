@@ -120,11 +120,13 @@ export class RtkWebviewDispatcher {
         // Ensure a usable binary exists and is reachable on PATH before wiring
         // Copilot's hook (which calls `rtk` by name).
         await this.manager.ensureBinary();
-        const { restartRequired } = await this.manager.ensureManagedOnPath().catch(() => ({ restartRequired: false }));
+        await this.manager.ensureManagedOnPath().catch(() => undefined);
         await this.manager.setup(scope, workspaceDir);
 
         const status = await this.manager.getStatus(this.optionalWorkspaceDir());
-        if (restartRequired || status.restartRequired) {
+        // The setup step pins the hook to an absolute binary path, so only the
+        // final status can determine whether a restart is still necessary.
+        if (status.restartRequired) {
           void vscode.window.showInformationMessage(
             "Renn Copilot: RTK is installed. Restart VS Code so GitHub Copilot can find the `rtk` command on PATH."
           );
