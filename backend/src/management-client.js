@@ -166,6 +166,11 @@ export const management = {
   getUsageStatisticsEnabled: () => call("/usage-statistics-enabled"),
   setUsageStatisticsEnabled: (value) =>
     call("/usage-statistics-enabled", { method: "PUT", body: { value } }),
+  // Static per-channel model metadata, including the named reasoning levels
+  // CLIProxyAPI can translate for each model. The ordinary /v1/models route
+  // intentionally exposes only OpenAI-compatible model-list fields.
+  getModelDefinitions: (channel) =>
+    call(`/model-definitions/${encodeURIComponent(channel)}`),
 
   // --- OAuth login flows ------------------------------------------------
   // Providers exposed directly by the Management API today: anthropic

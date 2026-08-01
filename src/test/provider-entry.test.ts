@@ -57,6 +57,27 @@ test("upsert updates in place when models change", () => {
   assert.deepEqual(second.providers[0].models, [model2]);
 });
 
+test("upsert preserves reasoning capability metadata", () => {
+  const reasoningModel: RemoteModelEntry = {
+    ...model,
+    thinking: true,
+    supportsReasoningEffort: ["low", "medium", "high"],
+    reasoningEffortFormat: "chat-completions",
+  };
+  const first = upsertProviderEntry([], [reasoningModel], "key123");
+  assert.deepEqual(first.providers[0].models, [reasoningModel]);
+
+  const changedLevels: RemoteModelEntry = {
+    ...reasoningModel,
+    supportsReasoningEffort: ["low", "medium", "high", "xhigh"],
+  };
+  const second = upsertProviderEntry(first.providers, [changedLevels], "key123");
+  assert.equal(second.created, false);
+  assert.equal(second.changed, true);
+  assert.deepEqual(second.providers[0].models, [changedLevels]);
+  assert.ok(!("modelOptions" in second.providers[0].models![0]));
+});
+
 test("upsert omits apiKey entirely when empty", () => {
   const { providers } = upsertProviderEntry([], [model], "");
   assert.ok(!("apiKey" in providers[0]));

@@ -17,6 +17,9 @@ export interface RemoteModelEntry {
   vision?: boolean;
   maxInputTokens?: number;
   maxOutputTokens?: number;
+  thinking?: boolean;
+  supportsReasoningEffort?: string[];
+  reasoningEffortFormat?: "chat-completions" | "responses" | "messages";
 }
 
 export interface ChatLanguageModelProvider {

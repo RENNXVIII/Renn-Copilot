@@ -19,6 +19,8 @@ import {
     mergeEnabledModels,
     migrateLegacyVisionCapability,
     modelCapabilityKey,
+    normalizeReasoningCapability,
+    resolveReasoningPreference,
     resolveVisionCapability,
     toCopilotModelEntry,
 } from "./model-catalog.js";
@@ -489,6 +491,37 @@ async function getOpenAiCompatEntries() {
     }
 }
 
+const REASONING_CHANNELS = new Set(["antigravity", "claude", "codex", "xai", "gemini", "vertex", "aistudio", "kimi"]);
+
+function baseModelId(model, prefixIndex) {
+    const slash = model.id.indexOf("/");
+    if (slash <= 0) return model.id;
+    const prefix = model.id.slice(0, slash);
+    if (prefixIndex[prefix] || prefix === model.provider) return model.id.slice(slash + 1);
+    return model.id;
+}
+
+async function getReasoningDefinitions(providers) {
+    const channels = Array.from(new Set(providers.filter((provider) => REASONING_CHANNELS.has(provider))));
+    const results = await Promise.all(channels.map(async (channel) => {
+        try {
+            const raw = await management.getModelDefinitions(channel);
+            return { channel, models: normalizeList(raw), ok: true };
+        } catch {
+            return { channel, models: [], ok: false };
+        }
+    }));
+
+    const byChannel = new Map();
+    const successfulChannels = new Set();
+    for (const result of results) {
+        if (!result.ok) continue;
+        successfulChannels.add(result.channel);
+        byChannel.set(result.channel, new Map(result.models.filter((item) => item?.id).map((item) => [item.id, item])));
+    }
+    return { byChannel, successfulChannels };
+}
+
 // In-process only -- coalesces explicit verify requests for the same scoped
 // model. GET /models never probes: polling the dashboard must remain free of
 // quota-consuming side effects.
@@ -509,8 +542,37 @@ async function getMergedCatalog() {
         if (JSON.stringify(nextMemory) !== JSON.stringify(memory)) {
             writeState({ modelProviderMemory: nextMemory });
         }
+        const { byChannel, successfulChannels } = await getReasoningDefinitions(models.map((model) => model.provider));
+        const cachedCapabilities = { ...(readState().modelReasoningCapabilities || {}) };
+        let cacheChanged = false;
+        const enriched = models.map((model) => {
+            const key = modelCapabilityKey(model);
+            const definition = byChannel.get(model.provider)?.get(baseModelId(model, prefixIndex));
+            let liveCapability = normalizeReasoningCapability(definition?.thinking);
+            if (liveCapability) {
+                const cached = cachedCapabilities[key];
+                const comparableLive = { ...liveCapability, checkedAt: undefined };
+                const comparableCached = cached ? { ...cached, checkedAt: undefined } : null;
+                if (JSON.stringify(comparableCached) !== JSON.stringify(comparableLive)) {
+                    cachedCapabilities[key] = liveCapability;
+                    cacheChanged = true;
+                } else {
+                    liveCapability = cached;
+                }
+                return { ...model, reasoningCapability: liveCapability };
+            }
+            if (!successfulChannels.has(model.provider) && cachedCapabilities[key]) {
+                return { ...model, reasoningCapability: { ...cachedCapabilities[key], source: "cache" } };
+            }
+            if (successfulChannels.has(model.provider) && cachedCapabilities[key]) {
+                delete cachedCapabilities[key];
+                cacheChanged = true;
+            }
+            return { ...model, reasoningCapability: null };
+        });
+        if (cacheChanged) writeState({ modelReasoningCapabilities: cachedCapabilities });
         return {
-            catalog: models,
+            catalog: enriched,
             source: liveIds.length ? "live" : "empty",
             liveError: null,
             prefixIndex,
@@ -579,6 +641,7 @@ router.get(
                 ...m,
                 enabled: state.enabledModelIds.includes(m.id),
                 capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
+                reasoning: resolveReasoningPreference(m, m.reasoningCapability, state.modelReasoningLevels),
             };
         });
         res.json({ models, source, liveError });
@@ -634,6 +697,35 @@ router.patch(
     })
 );
 
+router.patch(
+    "/models/:id/reasoning",
+    express.json(),
+    asyncHandler(async (req, res) => {
+        const modelId = req.params.id;
+        const rawLevel = req.body?.level;
+        if (rawLevel !== null && typeof rawLevel !== "string") {
+            return res.status(400).json({ error: "Body must include { level: string | null }." });
+        }
+
+        const { catalog } = await getMergedCatalog();
+        const model = catalog.find((item) => item.id === modelId);
+        if (!model) return res.status(404).json({ error: `Model "${modelId}" is not currently available.` });
+
+        const level = typeof rawLevel === "string" ? rawLevel.trim().toLowerCase() : null;
+        const capability = model.reasoningCapability;
+        if (level !== null && (!capability?.supported || !capability.levels.includes(level))) {
+            return res.status(400).json({ error: `Reasoning level "${rawLevel}" is not advertised for model "${modelId}".` });
+        }
+
+        const current = { ...(readState().modelReasoningLevels || {}) };
+        const key = modelCapabilityKey(model);
+        if (level === null) delete current[key];
+        else current[key] = level;
+        writeState({ modelReasoningLevels: current });
+        res.json({ modelId, reasoning: resolveReasoningPreference(model, capability, current) });
+    })
+);
+
 router.put(
     "/models",
     express.json(),
@@ -672,18 +764,28 @@ router.put(
 router.get(
     "/models/export",
     asyncHandler(async (req, res) => {
-        const state = readState();
         const { catalog } = await getMergedCatalog();
+        const state = readState();
         // Export every model the user explicitly enabled, even if the live
         // catalog is temporarily missing it during startup or account recovery.
         // This keeps the extension's Renn Copilot group stable across reloads.
         const enabled = mergeEnabledModels(catalog, state.enabledModelIds, state.modelProviderMemory);
-        const entries = enabled.map((m) =>
-            toCopilotModelEntry(
-                { ...m, capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)) },
+        const entries = enabled.map((m) => {
+            const cachedReasoning = state.modelReasoningCapabilities?.[modelCapabilityKey(m)];
+            const reasoningCapability = Object.hasOwn(m, "reasoningCapability")
+                ? m.reasoningCapability
+                : cachedReasoning
+                    ? { ...cachedReasoning, source: "cache" }
+                    : null;
+            return toCopilotModelEntry(
+                {
+                    ...m,
+                    capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
+                    reasoning: resolveReasoningPreference(m, reasoningCapability, state.modelReasoningLevels),
+                },
                 { proxyUrl: proxyBaseUrl(), ownBaseUrl: `http://127.0.0.1:${settings.port}` }
-            )
-        );
+            );
+        });
         // VS Code's current BYOK mechanism ("Custom Endpoint" provider, written to
         // chatLanguageModels.json) keys the API key at the *provider* level, not
         // per-model -- so the extension needs CLIProxyAPI's proxy key alongside

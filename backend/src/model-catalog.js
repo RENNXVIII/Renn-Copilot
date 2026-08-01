@@ -28,6 +28,55 @@ export function modelCapabilityKey(model) {
   return `${model.provider}::${model.id}`;
 }
 
+export function normalizeReasoningCapability(raw, source = "model-definitions") {
+  if (!raw || typeof raw !== "object") return null;
+  const values = Array.isArray(raw.levels) ? raw.levels : [];
+  const levels = Array.from(new Set(
+    values
+      .map((value) => String(value).trim().toLowerCase())
+      .filter((value) => value && value !== "auto" && value !== "-1")
+  ));
+  if (!levels.length) return null;
+
+  const defaultLevel = typeof raw.default_level === "string"
+    ? raw.default_level.trim().toLowerCase()
+    : typeof raw.defaultReasoningLevel === "string"
+      ? raw.defaultReasoningLevel.trim().toLowerCase()
+      : undefined;
+
+  return {
+    supported: true,
+    levels,
+    ...(defaultLevel && levels.includes(defaultLevel) ? { defaultLevel } : {}),
+    ...(typeof raw.dynamic_allowed === "boolean" ? { dynamicAllowed: raw.dynamic_allowed } : {}),
+    ...(typeof raw.zero_allowed === "boolean" ? { zeroAllowed: raw.zero_allowed } : {}),
+    ...(Number.isFinite(raw.min) ? { minBudget: raw.min } : {}),
+    ...(Number.isFinite(raw.max) ? { maxBudget: raw.max } : {}),
+    source,
+    checkedAt: Date.now(),
+  };
+}
+
+export function resolveReasoningPreference(model, capability, storedLevels = {}) {
+  const key = modelCapabilityKey(model);
+  const selected = storedLevels[key];
+  const supported = capability?.supported === true && Array.isArray(capability.levels) && capability.levels.length > 0;
+  const selectedLevel = supported && capability.levels.includes(selected) ? selected : null;
+  const staleSelection = typeof selected === "string" && selectedLevel === null ? selected : null;
+
+  return {
+    supported,
+    levels: supported ? capability.levels : [],
+    selectedLevel,
+    ...(capability?.defaultLevel ? { defaultLevel: capability.defaultLevel } : {}),
+    ...(typeof capability?.dynamicAllowed === "boolean" ? { dynamicAllowed: capability.dynamicAllowed } : {}),
+    ...(typeof capability?.zeroAllowed === "boolean" ? { zeroAllowed: capability.zeroAllowed } : {}),
+    source: capability?.source || "unknown",
+    ...(capability?.checkedAt ? { checkedAt: capability.checkedAt } : {}),
+    ...(staleSelection ? { note: `Previously selected level "${staleSelection}" is no longer advertised; using Auto.` } : {}),
+  };
+}
+
 export function resolveVisionCapability(model, storedCapability) {
   if (typeof storedCapability?.override === "boolean") {
     return {
@@ -218,9 +267,6 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
       };
     }
 
-    const known = byId.get(id);
-    if (known) return known;
-
     const slash = id.indexOf("/");
     if (slash > 0) {
       const prefix = id.slice(0, slash);
@@ -236,6 +282,9 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
         };
       }
     }
+
+    const known = byId.get(id);
+    if (known) return known;
 
     const provider = resolveProvider(id, loggedInProviders, memory);
     if (loggedInProviders.length === 1) nextMemory[id] = provider;
@@ -299,6 +348,7 @@ export function mergeEnabledModels(catalog = [], enabledModelIds = [], providerM
  */
 export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl }) {
   const verifiedVision = model.capabilities?.vision;
+  const reasoning = model.reasoning;
   // Claude-family models (any provider -- Antigravity, Claude Code login, or
   // a custom endpoint) get routed through our own sanitizing proxy instead
   // of straight to CLIProxyAPI, since Anthropic rejects non-default
@@ -315,5 +365,10 @@ export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl }) {
     vision: verifiedVision === true,
     maxInputTokens: model.thinking ? 32000 : 128000,
     maxOutputTokens: model.thinking ? 2048 : 4096,
+    ...(reasoning?.supported ? {
+      thinking: true,
+      supportsReasoningEffort: reasoning.levels,
+      reasoningEffortFormat: "chat-completions",
+    } : {}),
   };
 }

@@ -224,7 +224,7 @@ export function Models() {
                       {m.id} {m.thinking && "· thinking"}
                     </div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <div className="model-controls">
                     <CapabilityBadge
                       capabilities={m.capabilities}
                       verifying={!!verifying[m.id]}

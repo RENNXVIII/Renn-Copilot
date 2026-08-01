@@ -52,6 +52,18 @@ export interface ModelCapabilities {
     checkedAt?: number;
 }
 
+export interface ModelReasoning {
+    supported: boolean;
+    levels: string[];
+    selectedLevel: string | null;
+    defaultLevel?: string;
+    dynamicAllowed?: boolean;
+    zeroAllowed?: boolean;
+    source: "model-definitions" | "cache" | "unknown";
+    note?: string;
+    checkedAt?: number;
+}
+
 export interface ModelEntry {
     id: string;
     provider: string;
@@ -60,6 +72,7 @@ export interface ModelEntry {
     thinking: boolean;
     enabled: boolean;
     capabilities: ModelCapabilities;
+    reasoning: ModelReasoning;
 }
 
 export interface AuthFileEntry {
