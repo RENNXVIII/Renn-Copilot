@@ -8,110 +8,110 @@
  * Source: provider docs at help.router-for.me/configuration/provider/*
  */
 export const MODEL_CATALOG = [
-  // --- Antigravity (Google OAuth) ---------------------------------------
-  { id: "antigravity/claude-sonnet-4.5", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 (via Antigravity)", thinking: false, vision: true },
-  { id: "antigravity/claude-sonnet-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 Thinking (via Antigravity)", thinking: true, vision: true },
-  { id: "antigravity/claude-opus-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Opus 4.5 Thinking (via Antigravity)", thinking: true, vision: true },
-  { id: "antigravity/gemini-3-pro-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Pro (Preview, via Antigravity)", thinking: false, vision: true },
-  { id: "antigravity/gemini-3-flash-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Flash (Preview, via Antigravity)", thinking: false, vision: true },
-  { id: "antigravity/gemini-2.5-flash", provider: "antigravity", family: "gemini", label: "Gemini 2.5 Flash (via Antigravity)", thinking: false, vision: true },
+    // --- Antigravity (Google OAuth) ---------------------------------------
+    { id: "antigravity/claude-sonnet-4.5", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 (via Antigravity)", thinking: false, vision: true },
+    { id: "antigravity/claude-sonnet-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Sonnet 4.5 Thinking (via Antigravity)", thinking: true, vision: true },
+    { id: "antigravity/claude-opus-4.5-thinking", provider: "antigravity", family: "claude", label: "Claude Opus 4.5 Thinking (via Antigravity)", thinking: true, vision: true },
+    { id: "antigravity/gemini-3-pro-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Pro (Preview, via Antigravity)", thinking: false, vision: true },
+    { id: "antigravity/gemini-3-flash-preview", provider: "antigravity", family: "gemini", label: "Gemini 3 Flash (Preview, via Antigravity)", thinking: false, vision: true },
+    { id: "antigravity/gemini-2.5-flash", provider: "antigravity", family: "gemini", label: "Gemini 2.5 Flash (via Antigravity)", thinking: false, vision: true },
 
-  // --- Claude Code (Anthropic OAuth / Claude web) -----------------------
-  { id: "claude/claude-sonnet-4.5", provider: "claude", family: "claude", label: "Claude Sonnet 4.5 (Claude Code login)", thinking: false, vision: true },
-  { id: "claude/claude-opus-4.5", provider: "claude", family: "claude", label: "Claude Opus 4.5 (Claude Code login)", thinking: false, vision: true },
+    // --- Claude Code (Anthropic OAuth / Claude web) -----------------------
+    { id: "claude/claude-sonnet-4.5", provider: "claude", family: "claude", label: "Claude Sonnet 4.5 (Claude Code login)", thinking: false, vision: true },
+    { id: "claude/claude-opus-4.5", provider: "claude", family: "claude", label: "Claude Opus 4.5 (Claude Code login)", thinking: false, vision: true },
 
-  // --- Codex (ChatGPT OAuth) ---------------------------------------------
-  { id: "codex/gpt-5.1", provider: "codex", family: "gpt", label: "GPT-5.1 (Codex login)", thinking: false, vision: true },
+    // --- Codex (ChatGPT OAuth) ---------------------------------------------
+    { id: "codex/gpt-5.1", provider: "codex", family: "gpt", label: "GPT-5.1 (Codex login)", thinking: false, vision: true },
 ];
 
 export function modelCapabilityKey(model) {
-  return `${model.provider}::${model.id}`;
+    return `${model.provider}::${model.id}`;
 }
 
 export function normalizeReasoningCapability(raw, source = "model-definitions") {
-  if (!raw || typeof raw !== "object") return null;
-  const values = Array.isArray(raw.levels) ? raw.levels : [];
-  const levels = Array.from(new Set(
-    values
-      .map((value) => String(value).trim().toLowerCase())
-      .filter((value) => value && value !== "auto" && value !== "-1")
-  ));
-  if (!levels.length) return null;
+    if (!raw || typeof raw !== "object") return null;
+    const values = Array.isArray(raw.levels) ? raw.levels : [];
+    const levels = Array.from(new Set(
+        values
+            .map((value) => String(value).trim().toLowerCase())
+            .filter((value) => value && value !== "auto" && value !== "-1")
+    ));
+    if (!levels.length) return null;
 
-  const defaultLevel = typeof raw.default_level === "string"
-    ? raw.default_level.trim().toLowerCase()
-    : typeof raw.defaultReasoningLevel === "string"
-      ? raw.defaultReasoningLevel.trim().toLowerCase()
-      : undefined;
+    const defaultLevel = typeof raw.default_level === "string"
+        ? raw.default_level.trim().toLowerCase()
+        : typeof raw.defaultReasoningLevel === "string"
+            ? raw.defaultReasoningLevel.trim().toLowerCase()
+            : undefined;
 
-  return {
-    supported: true,
-    levels,
-    ...(defaultLevel && levels.includes(defaultLevel) ? { defaultLevel } : {}),
-    ...(typeof raw.dynamic_allowed === "boolean" ? { dynamicAllowed: raw.dynamic_allowed } : {}),
-    ...(typeof raw.zero_allowed === "boolean" ? { zeroAllowed: raw.zero_allowed } : {}),
-    ...(Number.isFinite(raw.min) ? { minBudget: raw.min } : {}),
-    ...(Number.isFinite(raw.max) ? { maxBudget: raw.max } : {}),
-    source,
-    checkedAt: Date.now(),
-  };
+    return {
+        supported: true,
+        levels,
+        ...(defaultLevel && levels.includes(defaultLevel) ? { defaultLevel } : {}),
+        ...(typeof raw.dynamic_allowed === "boolean" ? { dynamicAllowed: raw.dynamic_allowed } : {}),
+        ...(typeof raw.zero_allowed === "boolean" ? { zeroAllowed: raw.zero_allowed } : {}),
+        ...(Number.isFinite(raw.min) ? { minBudget: raw.min } : {}),
+        ...(Number.isFinite(raw.max) ? { maxBudget: raw.max } : {}),
+        source,
+        checkedAt: Date.now(),
+    };
 }
 
 export function resolveReasoningPreference(model, capability, storedLevels = {}) {
-  const key = modelCapabilityKey(model);
-  const selected = storedLevels[key];
-  const supported = capability?.supported === true && Array.isArray(capability.levels) && capability.levels.length > 0;
-  const selectedLevel = supported && capability.levels.includes(selected) ? selected : null;
-  const staleSelection = typeof selected === "string" && selectedLevel === null ? selected : null;
+    const key = modelCapabilityKey(model);
+    const selected = storedLevels[key];
+    const supported = capability?.supported === true && Array.isArray(capability.levels) && capability.levels.length > 0;
+    const selectedLevel = supported && capability.levels.includes(selected) ? selected : null;
+    const staleSelection = typeof selected === "string" && selectedLevel === null ? selected : null;
 
-  return {
-    supported,
-    levels: supported ? capability.levels : [],
-    selectedLevel,
-    ...(capability?.defaultLevel ? { defaultLevel: capability.defaultLevel } : {}),
-    ...(typeof capability?.dynamicAllowed === "boolean" ? { dynamicAllowed: capability.dynamicAllowed } : {}),
-    ...(typeof capability?.zeroAllowed === "boolean" ? { zeroAllowed: capability.zeroAllowed } : {}),
-    source: capability?.source || "unknown",
-    ...(capability?.checkedAt ? { checkedAt: capability.checkedAt } : {}),
-    ...(staleSelection ? { note: `Previously selected level "${staleSelection}" is no longer advertised; using Auto.` } : {}),
-  };
+    return {
+        supported,
+        levels: supported ? capability.levels : [],
+        selectedLevel,
+        ...(capability?.defaultLevel ? { defaultLevel: capability.defaultLevel } : {}),
+        ...(typeof capability?.dynamicAllowed === "boolean" ? { dynamicAllowed: capability.dynamicAllowed } : {}),
+        ...(typeof capability?.zeroAllowed === "boolean" ? { zeroAllowed: capability.zeroAllowed } : {}),
+        source: capability?.source || "unknown",
+        ...(capability?.checkedAt ? { checkedAt: capability.checkedAt } : {}),
+        ...(staleSelection ? { note: `Previously selected level "${staleSelection}" is no longer advertised; using Auto.` } : {}),
+    };
 }
 
 export function resolveVisionCapability(model, storedCapability) {
-  if (typeof storedCapability?.override === "boolean") {
-    return {
-      vision: storedCapability.override,
-      source: "manual",
-      checkedAt: storedCapability.overrideAt,
-    };
-  }
-  if (storedCapability?.probe) {
-    return storedCapability.probe;
-  }
-  if (storedCapability?.source === "manual" && typeof storedCapability.vision === "boolean") {
-    return storedCapability;
-  }
-  if (storedCapability && (typeof storedCapability.vision === "boolean" || storedCapability.vision === "unknown")) {
-    return storedCapability;
-  }
-  if (typeof model.vision === "boolean") {
-    return { vision: model.vision, source: "catalog" };
-  }
-  return { vision: "unknown", source: "unknown" };
+    if (typeof storedCapability?.override === "boolean") {
+        return {
+            vision: storedCapability.override,
+            source: "manual",
+            checkedAt: storedCapability.overrideAt,
+        };
+    }
+    if (storedCapability?.probe) {
+        return storedCapability.probe;
+    }
+    if (storedCapability?.source === "manual" && typeof storedCapability.vision === "boolean") {
+        return storedCapability;
+    }
+    if (storedCapability && (typeof storedCapability.vision === "boolean" || storedCapability.vision === "unknown")) {
+        return storedCapability;
+    }
+    if (typeof model.vision === "boolean") {
+        return { vision: model.vision, source: "catalog" };
+    }
+    return { vision: "unknown", source: "unknown" };
 }
 
 export function migrateLegacyVisionCapability(legacy) {
-  if (!legacy || typeof legacy !== "object") return undefined;
-  if (typeof legacy.override === "boolean" || legacy.probe) return legacy;
-  if (legacy.source === "manual" && typeof legacy.vision === "boolean") {
-    return { override: legacy.vision, overrideAt: legacy.checkedAt };
-  }
-  return {
-    probe: {
-      ...legacy,
-      source: legacy.source || "probe",
-    },
-  };
+    if (!legacy || typeof legacy !== "object") return undefined;
+    if (typeof legacy.override === "boolean" || legacy.probe) return legacy;
+    if (legacy.source === "manual" && typeof legacy.vision === "boolean") {
+        return { override: legacy.vision, overrideAt: legacy.checkedAt };
+    }
+    return {
+        probe: {
+            ...legacy,
+            source: legacy.source || "probe",
+        },
+    };
 }
 
 /**
@@ -143,26 +143,26 @@ export function migrateLegacyVisionCapability(legacy) {
  * became ambiguous. See resolveProvider() below for how that's used.
  */
 function guessProvider(id, loggedInProviders = []) {
-  if (loggedInProviders.length === 1) return loggedInProviders[0];
+    if (loggedInProviders.length === 1) return loggedInProviders[0];
 
-  const lower = id.toLowerCase();
-  const guess = lower.includes("gemini")
-    ? "antigravity" // Gemini is Antigravity-only today
-    : lower.includes("claude")
-      ? "claude"
-      : lower.includes("grok")
-        ? "xai"
-        : lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)
-          ? "codex"
-          : "other";
+    const lower = id.toLowerCase();
+    const guess = lower.includes("gemini")
+        ? "antigravity" // Gemini is Antigravity-only today
+        : lower.includes("claude")
+            ? "claude"
+            : lower.includes("grok")
+                ? "xai"
+                : lower.includes("gpt") || lower.includes("codex") || /\bo[134]\b/.test(lower)
+                    ? "codex"
+                    : "other";
 
-  // Only trust the name-based guess if that provider is actually logged in
-  // right now -- otherwise (e.g. a claude-named id naively guessed as
-  // "claude" when only antigravity+codex are logged in, because the real
-  // Claude Code login was never completed or was removed) this would invent
-  // a phantom provider group with zero credentials behind it. "other" is an
-  // honest "couldn't attribute this" bucket instead of a confidently wrong one.
-  return loggedInProviders.includes(guess) ? guess : "other";
+    // Only trust the name-based guess if that provider is actually logged in
+    // right now -- otherwise (e.g. a claude-named id naively guessed as
+    // "claude" when only antigravity+codex are logged in, because the real
+    // Claude Code login was never completed or was removed) this would invent
+    // a phantom provider group with zero credentials behind it. "other" is an
+    // honest "couldn't attribute this" bucket instead of a confidently wrong one.
+    return loggedInProviders.includes(guess) ? guess : "other";
 }
 
 /**
@@ -176,13 +176,13 @@ function guessProvider(id, loggedInProviders = []) {
  *  3. The name-based guess, only for ids we've never seen unambiguously.
  */
 function resolveProvider(id, loggedInProviders, memory) {
-  if (loggedInProviders.length === 1) return loggedInProviders[0];
-  // Only trust a learned attribution if that provider is *still* logged in --
-  // otherwise a model we once saw under (say) antigravity would keep showing
-  // under a phantom "antigravity" group after that provider is logged out,
-  // even though it's now actually served by whichever provider remains.
-  if (memory[id] && loggedInProviders.includes(memory[id])) return memory[id];
-  return guessProvider(id, loggedInProviders);
+    if (loggedInProviders.length === 1) return loggedInProviders[0];
+    // Only trust a learned attribution if that provider is *still* logged in --
+    // otherwise a model we once saw under (say) antigravity would keep showing
+    // under a phantom "antigravity" group after that provider is logged out,
+    // even though it's now actually served by whichever provider remains.
+    if (memory[id] && loggedInProviders.includes(memory[id])) return memory[id];
+    return guessProvider(id, loggedInProviders);
 }
 
 /**
@@ -198,15 +198,15 @@ function resolveProvider(id, loggedInProviders, memory) {
  * "Name" field, which CLIProxyAPI will accept either way).
  */
 function buildCustomProviderIndex(openAiCompatEntries = []) {
-  const index = new Map();
-  for (const entry of openAiCompatEntries) {
-    if (!entry?.name) continue;
-    const modelIds = Array.isArray(entry.models) && entry.models.length
-      ? entry.models.map((m) => m?.name).filter(Boolean)
-      : [entry.name];
-    for (const id of modelIds) index.set(id, entry.name);
-  }
-  return index;
+    const index = new Map();
+    for (const entry of openAiCompatEntries) {
+        if (!entry?.name) continue;
+        const modelIds = Array.isArray(entry.models) && entry.models.length
+            ? entry.models.map((m) => m?.name).filter(Boolean)
+            : [entry.name];
+        for (const id of modelIds) index.set(id, entry.name);
+    }
+    return index;
 }
 
 /**
@@ -249,55 +249,55 @@ function buildCustomProviderIndex(openAiCompatEntries = []) {
  * be told apart and toggled independently in the Models page.
  */
 export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompatEntries = [], memory = {}, prefixIndex = {}) {
-  if (!liveIds.length) return { models: [], memory };
+    if (!liveIds.length) return { models: [], memory };
 
-  const byId = new Map(MODEL_CATALOG.map((m) => [m.id, m]));
-  const customProviderById = buildCustomProviderIndex(openAiCompatEntries);
-  const nextMemory = { ...memory };
+    const byId = new Map(MODEL_CATALOG.map((m) => [m.id, m]));
+    const customProviderById = buildCustomProviderIndex(openAiCompatEntries);
+    const nextMemory = { ...memory };
 
-  const models = liveIds.map((id) => {
-    const customProvider = customProviderById.get(id);
-    if (customProvider) {
-      return {
-        id,
-        provider: customProvider,
-        family: customProvider,
-        label: `${id} (via ${customProvider})`,
-        thinking: /thinking/i.test(id),
-      };
-    }
+    const models = liveIds.map((id) => {
+        const customProvider = customProviderById.get(id);
+        if (customProvider) {
+            return {
+                id,
+                provider: customProvider,
+                family: customProvider,
+                label: `${id} (via ${customProvider})`,
+                thinking: /thinking/i.test(id),
+            };
+        }
 
-    const slash = id.indexOf("/");
-    if (slash > 0) {
-      const prefix = id.slice(0, slash);
-      const owner = prefixIndex[prefix];
-      if (owner) {
-        const rest = id.slice(slash + 1);
+        const slash = id.indexOf("/");
+        if (slash > 0) {
+            const prefix = id.slice(0, slash);
+            const owner = prefixIndex[prefix];
+            if (owner) {
+                const rest = id.slice(slash + 1);
+                return {
+                    id,
+                    provider: owner,
+                    family: owner,
+                    label: `${rest} (${prefix}, via ${owner})`,
+                    thinking: /thinking/i.test(id),
+                };
+            }
+        }
+
+        const known = byId.get(id);
+        if (known) return known;
+
+        const provider = resolveProvider(id, loggedInProviders, memory);
+        if (loggedInProviders.length === 1) nextMemory[id] = provider;
         return {
-          id,
-          provider: owner,
-          family: owner,
-          label: `${rest} (${prefix}, via ${owner})`,
-          thinking: /thinking/i.test(id),
+            id,
+            provider,
+            family: provider,
+            label: `${id} (new, via ${provider})`,
+            thinking: /thinking/i.test(id),
         };
-      }
-    }
+    });
 
-    const known = byId.get(id);
-    if (known) return known;
-
-    const provider = resolveProvider(id, loggedInProviders, memory);
-    if (loggedInProviders.length === 1) nextMemory[id] = provider;
-    return {
-      id,
-      provider,
-      family: provider,
-      label: `${id} (new, via ${provider})`,
-      thinking: /thinking/i.test(id),
-    };
-  });
-
-  return { models, memory: nextMemory };
+    return { models, memory: nextMemory };
 }
 
 /**
@@ -308,27 +308,27 @@ export function buildModelList(liveIds = [], loggedInProviders = [], openAiCompa
  * instead of disappearing from VS Code's provider group.
  */
 export function mergeEnabledModels(catalog = [], enabledModelIds = [], providerMemory = {}) {
-  const modelsById = new Map(catalog.map((model) => [model.id, model]));
-  const models = [];
+    const modelsById = new Map(catalog.map((model) => [model.id, model]));
+    const models = [];
 
-  for (const id of enabledModelIds) {
-    const known = modelsById.get(id);
-    if (known) {
-      models.push(known);
-      continue;
+    for (const id of enabledModelIds) {
+        const known = modelsById.get(id);
+        if (known) {
+            models.push(known);
+            continue;
+        }
+
+        const provider = providerMemory[id] || "other";
+        models.push({
+            id,
+            provider,
+            family: provider,
+            label: id,
+            thinking: /thinking/i.test(id),
+        });
     }
 
-    const provider = providerMemory[id] || "other";
-    models.push({
-      id,
-      provider,
-      family: provider,
-      label: id,
-      thinking: /thinking/i.test(id),
-    });
-  }
-
-  return models;
+    return models;
 }
 
 /**
@@ -346,29 +346,30 @@ export function mergeEnabledModels(catalog = [], enabledModelIds = [], providerM
  * UI after a curated catalog entry, successful probe, or manual override has
  * positively established support.
  */
-export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl }) {
-  const verifiedVision = model.capabilities?.vision;
-  const reasoning = model.reasoning;
-  // Claude-family models (any provider -- Antigravity, Claude Code login, or
-  // a custom endpoint) get routed through our own sanitizing proxy instead
-  // of straight to CLIProxyAPI, since Anthropic rejects non-default
-  // top_p/temperature/top_k on Claude Opus 4.7+/Sonnet 4.5+ and CLIProxyAPI
-  // forwards them unmodified (see chat-proxy.js). Everything else is
-  // unaffected and keeps going directly to CLIProxyAPI.
-  const isClaude = /claude/i.test(model.id);
-  const url = isClaude && ownBaseUrl ? `${ownBaseUrl}/api/proxy/v1/chat/completions` : `${proxyUrl}/v1/chat/completions`;
-  return {
-    id: model.id,
-    name: model.label,
-    url,
-    toolCalling: true,
-    vision: verifiedVision === true,
-    maxInputTokens: model.thinking ? 32000 : 128000,
-    maxOutputTokens: model.thinking ? 2048 : 4096,
-    ...(reasoning?.supported ? {
-      thinking: true,
-      supportsReasoningEffort: reasoning.levels,
-      reasoningEffortFormat: "chat-completions",
-    } : {}),
-  };
+export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl, forceCompatibilityProxy = false }) {
+    const verifiedVision = model.capabilities?.vision;
+    const reasoning = model.reasoning;
+    // Claude-family models (any provider -- Antigravity, Claude Code login, or
+    // a custom endpoint) get routed through our own sanitizing proxy instead
+    // of straight to CLIProxyAPI, since Anthropic rejects non-default
+    // top_p/temperature/top_k on Claude Opus 4.7+/Sonnet 4.5+ and CLIProxyAPI
+    // forwards them unmodified (see chat-proxy.js). Everything else is
+    // unaffected and keeps going directly to CLIProxyAPI.
+    const isClaude = /claude/i.test(model.id);
+    const useCompatibilityProxy = Boolean(ownBaseUrl && (isClaude || forceCompatibilityProxy));
+    const url = useCompatibilityProxy ? `${ownBaseUrl}/api/proxy/v1/chat/completions` : `${proxyUrl}/v1/chat/completions`;
+    return {
+        id: model.id,
+        name: model.label,
+        url,
+        toolCalling: true,
+        vision: verifiedVision === true,
+        maxInputTokens: model.thinking ? 32000 : 128000,
+        maxOutputTokens: model.thinking ? 2048 : 4096,
+        ...(reasoning?.supported ? {
+            thinking: true,
+            supportsReasoningEffort: reasoning.levels,
+            reasoningEffortFormat: "chat-completions",
+        } : {}),
+    };
 }

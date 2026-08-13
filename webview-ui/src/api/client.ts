@@ -228,6 +228,8 @@ export interface OpenAiCompatEntry {
     [key: string]: unknown;
 }
 
+export type RequestCompatibilityMode = "auto" | "standard" | "strict";
+
 export const api = {
     getStatus: () => request<ServerStatus>("/server/status"),
     install: () => request<{ ok: boolean; version: string }>("/server/install", { method: "POST" }),
@@ -297,6 +299,13 @@ export const api = {
         request<{ items: OpenAiCompatEntry[] }>("/api-providers/openai-compat", {
             method: "PUT",
             body: JSON.stringify({ items }),
+        }),
+    getRequestCompatibility: () =>
+        request<{ providers: Record<string, RequestCompatibilityMode> }>("/api-providers/request-compatibility"),
+    setRequestCompatibility: (provider: string, mode: RequestCompatibilityMode, previousProvider?: string) =>
+        request<{ providers: Record<string, RequestCompatibilityMode> }>("/api-providers/request-compatibility", {
+            method: "PUT",
+            body: JSON.stringify({ provider, mode, previousProvider }),
         }),
     getGeminiKeys: () => request<{ items: ApiKeyEntry[] }>("/api-providers/gemini-key"),
     setGeminiKeys: (items: ApiKeyEntry[]) =>

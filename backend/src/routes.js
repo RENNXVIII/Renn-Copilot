@@ -576,9 +576,16 @@ async function getMergedCatalog() {
             source: liveIds.length ? "live" : "empty",
             liveError: null,
             prefixIndex,
+            customProviderNames: new Set(openAiCompatEntries.map((entry) => entry?.name).filter(Boolean)),
         };
     } catch (err) {
-        return { catalog: [], source: "empty", liveError: err.message, prefixIndex };
+        return {
+            catalog: [],
+            source: "empty",
+            liveError: err.message,
+            prefixIndex,
+            customProviderNames: new Set(openAiCompatEntries.map((entry) => entry?.name).filter(Boolean)),
+        };
     }
 }
 
@@ -764,7 +771,7 @@ router.put(
 router.get(
     "/models/export",
     asyncHandler(async (req, res) => {
-        const { catalog } = await getMergedCatalog();
+        const { catalog, customProviderNames } = await getMergedCatalog();
         const state = readState();
         // Export every model the user explicitly enabled, even if the live
         // catalog is temporarily missing it during startup or account recovery.
@@ -783,7 +790,14 @@ router.get(
                     capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
                     reasoning: resolveReasoningPreference(m, reasoningCapability, state.modelReasoningLevels),
                 },
-                { proxyUrl: proxyBaseUrl(), ownBaseUrl: `http://127.0.0.1:${settings.port}` }
+                {
+                    proxyUrl: proxyBaseUrl(),
+                    ownBaseUrl: `http://127.0.0.1:${settings.port}`,
+                    // Custom endpoints default to Auto compatibility. Routing
+                    // them through Renn permits a scoped retry without changing
+                    // requests for OAuth or built-in API-key providers.
+                    forceCompatibilityProxy: customProviderNames.has(m.provider),
+                }
             );
         });
         // VS Code's current BYOK mechanism ("Custom Endpoint" provider, written to
@@ -809,6 +823,33 @@ router.put(
     asyncHandler(async (req, res) => {
         const items = Array.isArray(req.body?.items) ? req.body.items : [];
         res.json({ items: normalizeList(await management.putOpenAiCompatibility(items)) });
+    })
+);
+
+const REQUEST_COMPATIBILITY_MODES = new Set(["auto", "standard", "strict"]);
+
+router.get(
+    "/api-providers/request-compatibility",
+    (req, res) => res.json({ providers: readState().customProviderCompatibility || {} })
+);
+
+router.put(
+    "/api-providers/request-compatibility",
+    express.json(),
+    asyncHandler(async (req, res) => {
+        const provider = typeof req.body?.provider === "string" ? req.body.provider.trim() : "";
+        const previousProvider = typeof req.body?.previousProvider === "string" ? req.body.previousProvider.trim() : "";
+        const mode = req.body?.mode;
+        if (!provider) return res.status(400).json({ error: "provider is required" });
+        if (!REQUEST_COMPATIBILITY_MODES.has(mode)) {
+            return res.status(400).json({ error: "mode must be auto, standard, or strict" });
+        }
+
+        const current = { ...(readState().customProviderCompatibility || {}) };
+        if (previousProvider && previousProvider !== provider) delete current[previousProvider];
+        current[provider] = mode;
+        writeState({ customProviderCompatibility: current });
+        res.json({ providers: current });
     })
 );
 
