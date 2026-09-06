@@ -364,8 +364,6 @@ export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl, forceCompatib
         url,
         toolCalling: true,
         vision: verifiedVision === true,
-        maxInputTokens: model.thinking ? 32000 : 128000,
-        maxOutputTokens: model.thinking ? 2048 : 4096,
         ...(reasoning?.supported ? {
             thinking: true,
             supportsReasoningEffort: reasoning.levels,

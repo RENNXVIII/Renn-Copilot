@@ -15,8 +15,6 @@ export interface RemoteModelEntry {
   url: string;
   toolCalling?: boolean;
   vision?: boolean;
-  maxInputTokens?: number;
-  maxOutputTokens?: number;
   thinking?: boolean;
   supportsReasoningEffort?: string[];
   reasoningEffortFormat?: "chat-completions" | "responses" | "messages";
