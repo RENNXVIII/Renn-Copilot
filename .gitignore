@@ -26,6 +26,7 @@ npm-debug.log*
 Thumbs.db
 .idea/
 .vscode/
+.github/*
 # ...except this repo's own launch/task config -- committed so F5 (Run
 # Extension) works out of the box for anyone who opens this repo in VS Code.
 !.vscode/
