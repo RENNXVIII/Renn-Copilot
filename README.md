@@ -10,7 +10,7 @@ No separate terminal. No browser tab. No extra process to babysit.
 
 <br/>
 
-[![Version](https://img.shields.io/badge/version-0.7.22-blue)](https://github.com/RENNXVIII/Renn-Copilot)
+[![Version](https://img.shields.io/badge/version-0.8.12-blue)](https://github.com/RENNXVIII/Renn-Copilot)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.95-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
 [![Local-first](https://img.shields.io/badge/local--first-100%25-brightgreen)](#why-renn-copilot)
 [![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)](LICENSE)
@@ -76,7 +76,7 @@ compact **Activity Bar sidebar**.
 |---|---|
 | **Overview** | Install/update the CLIProxyAPI binary for your OS, compare installed vs. latest release, start/stop/restart, and watch status, health, and token trends — plus a top-model KPI, a success/fail meter, request mix by provider, and the runtime PID / management endpoint. |
 | **Providers & Login** | Log in to Antigravity, Claude, Codex, or xAI; add API keys and custom providers; manage credential groups, enablement, and quota reset. Header shows connected/inactive credential counts at a glance. |
-| **Models** | Toggle which models reach Copilot Chat — per-provider and global, with search, live vision verification, and manual Vision overrides. Header summarizes enabled/total models across providers. |
+| **Models** | Toggle which models reach Copilot Chat — per-provider and global, with search, live vision verification, and an **Override capabilities** modal per model (vision, reasoning/thinking effort levels, and context/input/output token limits). Header summarizes enabled/total models across providers. |
 | **Usage** | Token usage by provider/model (sortable, filterable, with cost estimate) plus account and OAuth/API-key health, and a success-rate meter across all credentials. |
 | **Activity** | A live-ish "neuron" view of your models — each one lights up as it's hit, sourced from usage (near-live, typically within ~15s). |
 | **Logs** | Live tail of CLIProxyAPI's request log and the backend's process log, with search, copy, and download. |
@@ -170,6 +170,30 @@ still marked Unknown are exported with `vision: false`; image attachments turn o
 only after positive evidence or an explicit override. For a custom provider,
 leave the selector on **Auto**, or pick **Vision** / **No vision** when its docs
 are definitive.
+
+---
+
+## Overriding model capabilities
+
+Click **Override capabilities** on any model row (Models page) to open a modal
+covering everything Renn Copilot resolves for that model:
+
+- **Vision** — the same Auto / Vision / No vision choice described above, plus
+  the re-check action, in one place.
+- **Reasoning / thinking** — force reasoning Auto / Enabled / Disabled, and pick
+  which effort levels (`none`, `low`, `medium`, `high`, `xhigh`, `max`, or a
+  custom level) VS Code's model picker is allowed to offer.
+- **Token limits** — Auto or a manual **context size**, **max input tokens**,
+  and **max output tokens** per model.
+
+Every field defaults to **Auto**, which keeps whatever CLIProxyAPI's model
+definitions (or curated catalog metadata) already report. **Reset all to Auto**
+clears every override for that model in one click.
+
+Vision and reasoning overrides affect what's synced into Copilot Chat's BYOK
+model list. Token-limit overrides are dashboard-only bookkeeping — Renn Copilot
+does not send `maxInputTokens`/`maxOutputTokens`/context size to VS Code's
+Custom Endpoint provider, so they never change request behavior in Copilot Chat.
 
 ---
 
