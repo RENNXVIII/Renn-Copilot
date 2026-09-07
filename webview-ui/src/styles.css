@@ -394,6 +394,18 @@ button.btn:disabled {
   flex-wrap: wrap;
 }
 
+.capability-summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.capability-edit-button {
+  white-space: nowrap;
+}
+
 .capability-controls {
   display: flex;
   align-items: center;
@@ -916,6 +928,109 @@ select.text-input {
   display: flex;
   flex-direction: column;
   gap: 10px;
+}
+
+.capability-modal {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.capability-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--vscode-editor-foreground) 3%, transparent);
+}
+
+.capability-section-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.capability-section-title {
+  font-weight: 600;
+}
+
+.capability-levels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.capability-level-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 8px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 999px;
+  font-size: 0.82em;
+  cursor: pointer;
+}
+
+.capability-token-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.capability-token-field {
+  display: grid;
+  grid-template-columns: minmax(150px, 1fr) 80px minmax(120px, 0.8fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.capability-token-field .field-label {
+  color: var(--vscode-foreground);
+  font-weight: 500;
+}
+
+.capability-error {
+  color: var(--vscode-errorForeground);
+  border: 1px solid color-mix(in srgb, var(--vscode-errorForeground) 35%, transparent);
+  background: color-mix(in srgb, var(--vscode-errorForeground) 8%, transparent);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 0.85em;
+}
+
+.capability-modal-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 620px) {
+  .model-row,
+  .model-controls {
+    align-items: flex-start;
+  }
+
+  .model-row {
+    flex-direction: column;
+  }
+
+  .model-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .capability-token-field {
+    grid-template-columns: 1fr 90px;
+  }
+
+  .capability-token-field .text-input {
+    grid-column: 1 / -1;
+  }
 }
 
 .modal-header {

@@ -59,9 +59,41 @@ export interface ModelReasoning {
     defaultLevel?: string;
     dynamicAllowed?: boolean;
     zeroAllowed?: boolean;
-    source: "model-definitions" | "cache" | "unknown";
+    source: "manual" | "model-definitions" | "cache" | "unknown";
     note?: string;
     checkedAt?: number;
+}
+
+export interface ModelTokenLimits {
+    contextTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+}
+
+export interface ModelCapabilityOverrides extends ModelTokenLimits {
+    vision?: boolean;
+    reasoningSupported?: boolean;
+    reasoningLevels?: string[];
+}
+
+export interface ModelCapabilityConfiguration {
+    overrides: ModelCapabilityOverrides;
+    reasoning: Omit<ModelReasoning, "selectedLevel">;
+    limits: {
+        detected: ModelTokenLimits;
+        effective: ModelTokenLimits;
+        overrides: ModelTokenLimits;
+        sources: Partial<Record<keyof ModelTokenLimits, "manual" | "detected">>;
+    };
+}
+
+export interface ModelCapabilityPatch {
+    vision?: boolean | null;
+    reasoningSupported?: boolean | null;
+    reasoningLevels?: string[] | null;
+    contextTokens?: number | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
 }
 
 export interface ModelEntry {
@@ -73,6 +105,7 @@ export interface ModelEntry {
     enabled: boolean;
     capabilities: ModelCapabilities;
     reasoning: ModelReasoning;
+    capabilityConfiguration: ModelCapabilityConfiguration;
 }
 
 export interface AuthFileEntry {
@@ -253,6 +286,16 @@ export const api = {
         request<{ modelId: string; capabilities: ModelCapabilities }>(`/models/${encodeURIComponent(modelId)}/vision`, {
             method: "PATCH",
             body: JSON.stringify({ vision }),
+        }),
+    setModelCapabilities: (modelId: string, patch: ModelCapabilityPatch) =>
+        request<{
+            modelId: string;
+            capabilities: ModelCapabilities;
+            reasoning: ModelReasoning;
+            capabilityConfiguration: ModelCapabilityConfiguration;
+        }>(`/models/${encodeURIComponent(modelId)}/capabilities`, {
+            method: "PATCH",
+            body: JSON.stringify(patch),
         }),
     verifyVision: async (modelId: string) => {
         const res = await fetch(`${BACKEND_URL}/api/models/${encodeURIComponent(modelId)}/verify-vision`, {

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { api, type ModelCapabilities, type ModelEntry } from "../api/client";
+import { api, type ModelCapabilityPatch, type ModelEntry } from "../api/client";
+import { ModelCapabilityEditor } from "../components/ModelCapabilityEditor";
 import { usePolling } from "../hooks/usePolling";
 import { loadCustomGroups } from "../lib/custom-groups";
 import { postSyncModels } from "../vscodeApi";
@@ -27,7 +28,9 @@ export function Models() {
   const [activeTab, setActiveTab] = useState("all");
   const [query, setQuery] = useState("");
   const [verifying, setVerifying] = useState<Record<string, boolean>>({});
-  const [overriding, setOverriding] = useState<Record<string, boolean>>({});
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
+  const [savingCapabilities, setSavingCapabilities] = useState(false);
+  const [capabilityError, setCapabilityError] = useState<string | null>(null);
   // Custom-provider grouping is set on the Providers page and stored in
   // localStorage (never sent to the backend) -- read it here too so a model
   // served by e.g. a "tokenrouter" custom provider shows under that label.
@@ -63,32 +66,36 @@ export function Models() {
     }
   }
 
-  async function setVisionOverride(model: ModelEntry, value: string) {
-    if (overriding[model.id]) return;
-    const vision = value === "auto" ? "auto" : value === "vision";
-    setOverriding((current) => ({ ...current, [model.id]: true }));
+  async function saveCapabilities(model: ModelEntry, patch: ModelCapabilityPatch) {
+    if (savingCapabilities) return;
+    setSavingCapabilities(true);
+    setCapabilityError(null);
     try {
-      const result = await api.setVisionOverride(model.id, vision);
+      const result = await api.setModelCapabilities(model.id, patch);
       mutate(
         (current) =>
           current && {
             ...current,
-            models: current.models.map((m) => (m.id === model.id ? { ...m, capabilities: result.capabilities } : m)),
+            models: current.models.map((m) =>
+              m.id === model.id
+                ? {
+                    ...m,
+                    capabilities: result.capabilities,
+                    reasoning: result.reasoning,
+                    capabilityConfiguration: result.capabilityConfiguration,
+                  }
+                : m
+            ),
           },
         false
       );
       postSyncModels();
+      setEditingModelId(null);
     } catch (err) {
-      mutate(
-        (current) =>
-          current && {
-            ...current,
-            models: current.models.map((m) => (m.id === model.id ? { ...m, capabilities: { ...m.capabilities, note: (err as Error).message } } : m)),
-          },
-        false
-      );
+      setCapabilityError((err as Error).message);
+      throw err;
     } finally {
-      setOverriding((current) => ({ ...current, [model.id]: false }));
+      setSavingCapabilities(false);
       mutate(undefined, true);
     }
   }
@@ -141,6 +148,8 @@ export function Models() {
   function setAllEnabled(enabled: boolean) {
     return applyEnabledIds(enabled ? models.map((m) => m.id) : []);
   }
+
+  const editingModel = models.find((model) => model.id === editingModelId) ?? null;
 
   return (
     <div className="page">
@@ -225,13 +234,16 @@ export function Models() {
                     </div>
                   </div>
                   <div className="model-controls">
-                    <CapabilityBadge
-                      capabilities={m.capabilities}
-                      verifying={!!verifying[m.id]}
-                      overriding={!!overriding[m.id]}
-                      onRecheck={() => verifyModel(m)}
-                      onOverride={(value) => setVisionOverride(m, value)}
-                    />
+                    <CapabilitySummary model={m} />
+                    <button
+                      className="btn secondary capability-edit-button"
+                      onClick={() => {
+                        setCapabilityError(null);
+                        setEditingModelId(m.id);
+                      }}
+                    >
+                      Override capabilities
+                    </button>
                     <input type="checkbox" className="toggle" checked={m.enabled} disabled={saving} onChange={(e) => toggle(m, e.target.checked)} />
                   </div>
                 </div>
@@ -245,61 +257,50 @@ export function Models() {
         After changing models here, reload VS Code and enable them via Copilot Chat's model picker → "Manage Models..." → click the eye icon. That last
         step has to be manual -- VS Code doesn't expose an API to enable BYOK models programmatically yet.
       </div>
+
+      <ModelCapabilityEditor
+        model={editingModel}
+        saving={savingCapabilities}
+        verifying={editingModel ? !!verifying[editingModel.id] : false}
+        error={capabilityError}
+        onClose={() => {
+          setCapabilityError(null);
+          setEditingModelId(null);
+        }}
+        onSave={(patch) => (editingModel ? saveCapabilities(editingModel, patch) : Promise.resolve())}
+        onVerifyVision={() => (editingModel ? verifyModel(editingModel) : Promise.resolve())}
+      />
     </div>
   );
 }
 
-function CapabilityBadge({
-  capabilities,
-  verifying,
-  overriding,
-  onRecheck,
-  onOverride,
-}: {
-  capabilities: ModelCapabilities;
-  verifying: boolean;
-  overriding: boolean;
-  onRecheck: () => void;
-  onOverride: (value: string) => void;
-}) {
-  const { vision, source, note, checkedAt } = capabilities;
+function CapabilitySummary({ model }: { model: ModelEntry }) {
+  const { vision, source, note, checkedAt } = model.capabilities;
   const sourceLabel =
     source === "manual" ? "Manual" : source === "probe" ? "Verified" : source === "catalog" ? "Catalog" : source === "provider-metadata" ? "Provider" : "Unknown";
   const checkedLabel = checkedAt ? ` · checked ${new Date(checkedAt).toLocaleString()}` : "";
   const title = `${note || sourceLabel}${checkedLabel}`;
-  const badge =
-    vision === true ? (
+  const limits = model.capabilityConfiguration.limits.effective;
+  const manualCount = Object.keys(model.capabilityConfiguration.overrides).length;
+
+  return (
+    <div className="capability-summary">
+      {vision === true ? (
       <span className="badge success" title={title}>
-        Vision · {sourceLabel}
+          Vision
       </span>
     ) : vision === false ? (
       <span className="badge error" title={title}>
-        No vision · {sourceLabel}
+          No vision
       </span>
     ) : (
       <span className="badge neutral" title={title}>
         Vision unknown
       </span>
-    );
-
-  return (
-    <div className="capability-controls">
-      {badge}
-      <select
-        className="capability-select"
-        aria-label="Vision capability mode"
-        title="Auto uses catalog metadata or a verified probe. Manual choices override both."
-        value={source === "manual" ? (vision ? "vision" : "no-vision") : "auto"}
-        disabled={verifying || overriding}
-        onChange={(event) => onOverride(event.target.value)}
-      >
-        <option value="auto">Auto</option>
-        <option value="vision">Vision</option>
-        <option value="no-vision">No vision</option>
-      </select>
-      <button className="icon-recheck" title="Verify vision support (sends one real test request)" disabled={verifying || overriding} onClick={onRecheck}>
-        {verifying ? "⟳" : "↻"}
-      </button>
+      )}
+      {model.reasoning.supported && <span className="badge neutral">Reasoning · {model.reasoning.levels.join("/")}</span>}
+      {limits.contextTokens && <span className="badge neutral">{Math.round(limits.contextTokens / 1000)}K context</span>}
+      {manualCount > 0 && <span className="badge warning">{manualCount} manual</span>}
     </div>
   );
 }
