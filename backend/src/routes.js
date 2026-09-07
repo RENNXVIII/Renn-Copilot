@@ -24,6 +24,11 @@ import {
     resolveVisionCapability,
     toCopilotModelEntry,
 } from "./model-catalog.js";
+import {
+    applyCapabilityOverrides,
+    normalizeDetectedTokenLimits,
+    resolveCapabilityConfiguration,
+} from "./model-capabilities.js";
 import { readState, writeState } from "./state.js";
 import { settings, proxyBaseUrl } from "./settings.js";
 import { getUsageSummary, getUsageByCredential, getUsageByCredentialWindows } from "./usage-store.js";
@@ -548,6 +553,7 @@ async function getMergedCatalog() {
         const enriched = models.map((model) => {
             const key = modelCapabilityKey(model);
             const definition = byChannel.get(model.provider)?.get(baseModelId(model, prefixIndex));
+            const tokenLimits = normalizeDetectedTokenLimits(definition);
             let liveCapability = normalizeReasoningCapability(definition?.thinking);
             if (liveCapability) {
                 const cached = cachedCapabilities[key];
@@ -559,16 +565,16 @@ async function getMergedCatalog() {
                 } else {
                     liveCapability = cached;
                 }
-                return { ...model, reasoningCapability: liveCapability };
+                return { ...model, reasoningCapability: liveCapability, tokenLimits };
             }
             if (!successfulChannels.has(model.provider) && cachedCapabilities[key]) {
-                return { ...model, reasoningCapability: { ...cachedCapabilities[key], source: "cache" } };
+                return { ...model, reasoningCapability: { ...cachedCapabilities[key], source: "cache" }, tokenLimits };
             }
             if (successfulChannels.has(model.provider) && cachedCapabilities[key]) {
                 delete cachedCapabilities[key];
                 cacheChanged = true;
             }
-            return { ...model, reasoningCapability: null };
+            return { ...model, reasoningCapability: null, tokenLimits };
         });
         if (cacheChanged) writeState({ modelReasoningCapabilities: cachedCapabilities });
         return {
@@ -611,6 +617,14 @@ function storedCapabilityFor(model, state) {
     return migrated;
 }
 
+function storedOverridesFor(model, state) {
+    return state.modelCapabilityOverrides?.[modelCapabilityKey(model)] || {};
+}
+
+function resolvedConfigurationFor(model, state) {
+    return resolveCapabilityConfiguration(model.reasoningCapability, model.tokenLimits, storedOverridesFor(model, state));
+}
+
 async function probeAndStoreVision(model) {
     const key = modelCapabilityKey(model);
     if (visionProbeInFlight.has(key)) return visionProbeInFlight.get(key);
@@ -644,11 +658,21 @@ router.get(
         const { catalog, source, liveError } = await getMergedCatalog();
 
         const models = catalog.map((m) => {
+            const configuration = resolvedConfigurationFor(m, state);
             return {
                 ...m,
                 enabled: state.enabledModelIds.includes(m.id),
                 capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
-                reasoning: resolveReasoningPreference(m, m.reasoningCapability, state.modelReasoningLevels),
+                reasoning: resolveReasoningPreference(m, configuration.reasoning, state.modelReasoningLevels),
+                capabilityConfiguration: {
+                    ...configuration,
+                    overrides: {
+                        ...storedOverridesFor(m, state),
+                        ...(typeof storedCapabilityFor(m, state)?.override === "boolean"
+                            ? { vision: storedCapabilityFor(m, state).override }
+                            : {}),
+                    },
+                },
             };
         });
         res.json({ models, source, liveError });
@@ -733,6 +757,68 @@ router.patch(
     })
 );
 
+router.patch(
+    "/models/:id/capabilities",
+    express.json(),
+    asyncHandler(async (req, res) => {
+        const modelId = req.params.id;
+        const { catalog } = await getMergedCatalog();
+        const model = catalog.find((item) => item.id === modelId);
+        if (!model) return res.status(404).json({ error: `Model "${modelId}" is not currently available.` });
+
+        const state = readState();
+        const key = modelCapabilityKey(model);
+        const patch = req.body || {};
+        let overrides;
+        try {
+            overrides = applyCapabilityOverrides(
+                storedOverridesFor(model, state),
+                patch,
+                model.reasoningCapability,
+                model.tokenLimits
+            );
+        } catch (err) {
+            return res.status(400).json({ error: err.message });
+        }
+
+        const allOverrides = { ...(state.modelCapabilityOverrides || {}) };
+        const { vision, ...nonVisionOverrides } = overrides;
+        if (Object.keys(nonVisionOverrides).length) allOverrides[key] = nonVisionOverrides;
+        else delete allOverrides[key];
+
+        const visionState = { ...(state.modelCapabilities || {}) };
+        if (Object.hasOwn(patch, "vision")) {
+            if (patch.vision === null) {
+                const existing = visionState[key];
+                if (existing?.probe && existing.probe.source !== "manual") visionState[key] = { probe: existing.probe };
+                else delete visionState[key];
+                delete visionState[model.id];
+            } else {
+                const existing = visionState[key] || {};
+                visionState[key] = { ...existing, override: patch.vision, overrideAt: Date.now() };
+            }
+        }
+
+        const nextState = writeState({
+            modelCapabilityOverrides: allOverrides,
+            modelCapabilities: visionState,
+        });
+        const configuration = resolveCapabilityConfiguration(model.reasoningCapability, model.tokenLimits, nonVisionOverrides);
+        res.json({
+            modelId,
+            capabilities: resolveVisionCapability(model, visionState[key]),
+            reasoning: resolveReasoningPreference(model, configuration.reasoning, nextState.modelReasoningLevels),
+            capabilityConfiguration: {
+                ...configuration,
+                overrides: {
+                    ...nonVisionOverrides,
+                    ...(typeof visionState[key]?.override === "boolean" ? { vision: visionState[key].override } : {}),
+                },
+            },
+        });
+    })
+);
+
 router.put(
     "/models",
     express.json(),
@@ -784,11 +870,16 @@ router.get(
                 : cachedReasoning
                     ? { ...cachedReasoning, source: "cache" }
                     : null;
+            const configuration = resolveCapabilityConfiguration(
+                reasoningCapability,
+                m.tokenLimits || {},
+                storedOverridesFor(m, state)
+            );
             return toCopilotModelEntry(
                 {
                     ...m,
                     capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
-                    reasoning: resolveReasoningPreference(m, reasoningCapability, state.modelReasoningLevels),
+                    reasoning: resolveReasoningPreference(m, configuration.reasoning, state.modelReasoningLevels),
                 },
                 {
                     proxyUrl: proxyBaseUrl(),

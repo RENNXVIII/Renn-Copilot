@@ -32,6 +32,9 @@ const defaultState = {
     // catalog evidence is resolved at runtime and is not copied into state.
     // Legacy model-id-only keys are migrated lazily when that model is listed.
     modelCapabilities: {},
+    // Manual reasoning and token-limit metadata keyed by provider + model id.
+    // Token limits are dashboard-only and are never written to VS Code.
+    modelCapabilityOverrides: {},
     // Explicit per-model reasoning choices. A missing key means Auto: Renn does
     // not force a level and leaves CLIProxyAPI/provider defaults untouched.
     modelReasoningLevels: {},

@@ -62,6 +62,21 @@ test("unknown capability exports vision false", () => {
     assert.equal(entry.vision, false);
 });
 
+test("token-limit metadata is never exported to VS Code", () => {
+    const entry = toCopilotModelEntry(
+        {
+            ...model,
+            capabilities: { vision: false, source: "catalog" },
+            tokenLimits: { contextTokens: 256000, inputTokens: 240000, outputTokens: 16000 },
+        },
+        { proxyUrl: "http://127.0.0.1:8317" }
+    );
+
+    assert.equal("contextSize" in entry, false);
+    assert.equal("maxInputTokens" in entry, false);
+    assert.equal("maxOutputTokens" in entry, false);
+});
+
 test("probe requires a response identifying the red image", () => {
     assert.deepEqual(
         classifyVisionProbeResponse({
