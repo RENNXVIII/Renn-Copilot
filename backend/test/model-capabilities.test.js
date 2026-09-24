@@ -79,17 +79,17 @@ test("resetting overrides restores detected values", () => {
     assert.deepEqual(overrides, {});
 });
 
-test("rejects invalid token limits and reasoning levels", () => {
-    assert.throws(
-        () =>
-            applyCapabilityOverrides(
-                {},
-                { contextTokens: 1000, inputTokens: 800, outputTokens: 300 },
-                null,
-                {}
-            ),
-        /sum must not exceed contextTokens/
+test("input and output overrides are not constrained by detected context size", () => {
+    const overrides = applyCapabilityOverrides(
+        {},
+        { contextTokens: null, inputTokens: 1000000, outputTokens: 128000 },
+        null,
+        { contextTokens: 1000000 }
     );
+    assert.deepEqual(overrides, { inputTokens: 1000000, outputTokens: 128000 });
+});
+
+test("rejects invalid token limits and reasoning levels", () => {
     assert.throws(
         () =>
             applyCapabilityOverrides(

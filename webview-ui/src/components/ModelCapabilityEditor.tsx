@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ModelCapabilityPatch, ModelEntry, ModelTokenLimits } from "../api/client";
+import type { ModelCapabilityPatch, ModelEntry } from "../api/client";
 import {
   capabilityFormFromModel,
   capabilityPatchFromForm,
@@ -18,8 +18,7 @@ interface Props {
   onVerifyVision: () => Promise<void>;
 }
 
-const TOKEN_FIELDS: Array<{ key: keyof ModelTokenLimits; label: string; description: string }> = [
-  { key: "contextTokens", label: "Context size", description: "Total context window tracked by Renn." },
+const TOKEN_FIELDS: Array<{ key: keyof CapabilityFormState["tokenModes"]; label: string; description: string }> = [
   { key: "inputTokens", label: "Max input tokens", description: "Maximum prompt/input allocation." },
   { key: "outputTokens", label: "Max output tokens", description: "Maximum generated output allocation." },
 ];
@@ -61,7 +60,7 @@ export function ModelCapabilityEditor({ model, saving, verifying, error, onClose
       reasoningMode: "auto",
       reasoningLevels: [],
       customReasoningLevels: "",
-      tokenModes: { contextTokens: "auto", inputTokens: "auto", outputTokens: "auto" },
+      tokenModes: { inputTokens: "auto", outputTokens: "auto" },
     });
     setValidationError(null);
   }
@@ -130,7 +129,7 @@ export function ModelCapabilityEditor({ model, saving, verifying, error, onClose
 
         <section className="capability-section">
           <div className="capability-section-title">Token limits</div>
-          <div className="card-desc">Stored as internal metadata only. These values are not exported to VS Code.</div>
+          <div className="card-desc">When both are Auto, token limits are omitted from VS Code. With a manual value, Auto uses detected values or safe defaults when unknown.</div>
           <div className="capability-token-grid">
             {TOKEN_FIELDS.map(({ key, label, description }) => (
               <div className="capability-token-field" key={key}>

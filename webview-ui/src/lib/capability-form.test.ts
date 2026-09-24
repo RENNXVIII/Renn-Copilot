@@ -38,11 +38,9 @@ test("form initializes capability fields in Auto mode", () => {
   assert.equal(form.vision, "auto");
   assert.equal(form.reasoningMode, "auto");
   assert.deepEqual(form.tokenModes, {
-    contextTokens: "auto",
     inputTokens: "auto",
     outputTokens: "auto",
   });
-  assert.equal(form.tokenValues.contextTokens, "128000");
 });
 
 test("Auto fields produce null overrides", () => {
@@ -64,15 +62,15 @@ test("manual reasoning and token values are normalized", () => {
     reasoningMode: "enabled",
     reasoningLevels: ["high", "max"],
     customReasoningLevels: " Ultra, HIGH ",
-    tokenModes: { contextTokens: "manual", inputTokens: "manual", outputTokens: "manual" },
-    tokenValues: { contextTokens: "256,000", inputTokens: "240000", outputTokens: "16000" },
+    tokenModes: { inputTokens: "manual", outputTokens: "manual" },
+    tokenValues: { inputTokens: "240000", outputTokens: "16000" },
   };
 
   assert.deepEqual(capabilityPatchFromForm(form), {
     vision: false,
     reasoningSupported: true,
     reasoningLevels: ["high", "max", "ultra"],
-    contextTokens: 256000,
+    contextTokens: null,
     inputTokens: 240000,
     outputTokens: 16000,
   });

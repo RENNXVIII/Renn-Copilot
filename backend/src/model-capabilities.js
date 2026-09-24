@@ -94,16 +94,6 @@ function validateEffectiveConfiguration(detectedReasoning, detectedLimits, overr
         throw new Error("Reasoning requires at least one reasoning level.");
     }
 
-    const { contextTokens, inputTokens, outputTokens } = resolved.limits.effective;
-    if (contextTokens && inputTokens && inputTokens > contextTokens) {
-        throw new Error("inputTokens must not exceed contextTokens.");
-    }
-    if (contextTokens && outputTokens && outputTokens > contextTokens) {
-        throw new Error("outputTokens must not exceed contextTokens.");
-    }
-    if (contextTokens && inputTokens && outputTokens && inputTokens + outputTokens > contextTokens) {
-        throw new Error("inputTokens and outputTokens sum must not exceed contextTokens.");
-    }
 }
 
 export function applyCapabilityOverrides(current = {}, patch = {}, detectedReasoning = null, detectedLimits = {}) {

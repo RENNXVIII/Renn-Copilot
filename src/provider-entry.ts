@@ -13,6 +13,8 @@ export interface RemoteModelEntry {
   id: string;
   name: string;
   url: string;
+  maxInputTokens?: number;
+  maxOutputTokens?: number;
   toolCalling?: boolean;
   vision?: boolean;
   thinking?: boolean;

@@ -880,6 +880,8 @@ router.get(
                     ...m,
                     capabilities: resolveVisionCapability(m, storedCapabilityFor(m, state)),
                     reasoning: resolveReasoningPreference(m, configuration.reasoning, state.modelReasoningLevels),
+                    limits: configuration.limits.effective,
+                    tokenLimitOverrides: configuration.limits.overrides,
                 },
                 {
                     proxyUrl: proxyBaseUrl(),

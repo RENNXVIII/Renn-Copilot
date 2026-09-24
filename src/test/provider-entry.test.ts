@@ -78,6 +78,22 @@ test("upsert preserves reasoning capability metadata", () => {
   assert.ok(!("modelOptions" in second.providers[0].models![0]));
 });
 
+test("upsert preserves token limits and updates the owned entry when they change", () => {
+  const withLimits: RemoteModelEntry = {
+    ...model,
+    maxInputTokens: 968000,
+    maxOutputTokens: 32000,
+  };
+  const first = upsertProviderEntry([otherProvider], [withLimits], "key123");
+  assert.deepEqual(first.providers[1].models, [withLimits]);
+
+  const updated = { ...withLimits, maxOutputTokens: 16000 };
+  const second = upsertProviderEntry(first.providers, [updated], "key123");
+  assert.equal(second.changed, true);
+  assert.deepEqual(second.providers[1].models, [updated]);
+  assert.deepEqual(second.providers[0], otherProvider);
+});
+
 test("upsert omits apiKey entirely when empty", () => {
   const { providers } = upsertProviderEntry([], [model], "");
   assert.ok(!("apiKey" in providers[0]));

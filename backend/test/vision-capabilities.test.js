@@ -10,6 +10,7 @@ import {
     resolveVisionCapability,
     toCopilotModelEntry,
 } from "../src/model-catalog.js";
+import { resolveCapabilityConfiguration } from "../src/model-capabilities.js";
 import { classifyVisionProbeResponse } from "../src/proxy-client.js";
 
 const model = {
@@ -62,19 +63,60 @@ test("unknown capability exports vision false", () => {
     assert.equal(entry.vision, false);
 });
 
-test("token-limit metadata is never exported to VS Code", () => {
+test("input and output limits are exported without a contextWindow", () => {
     const entry = toCopilotModelEntry(
         {
             ...model,
             capabilities: { vision: false, source: "catalog" },
-            tokenLimits: { contextTokens: 256000, inputTokens: 240000, outputTokens: 16000 },
+            limits: { contextTokens: 256000, inputTokens: 240000, outputTokens: 16000 },
+            tokenLimitOverrides: { inputTokens: 240000, outputTokens: 16000 },
         },
         { proxyUrl: "http://127.0.0.1:8317" }
     );
 
-    assert.equal("contextSize" in entry, false);
+    assert.equal("contextWindow" in entry, false);
+    assert.equal(entry.maxInputTokens, 240000);
+    assert.equal(entry.maxOutputTokens, 16000);
+});
+
+test("input and output overrides can exceed detected context metadata", () => {
+    const entry = toCopilotModelEntry(
+        { ...model, capabilities: { vision: false }, limits: { contextTokens: 1000000, inputTokens: 1000000, outputTokens: 128000 }, tokenLimitOverrides: { inputTokens: 1000000, outputTokens: 128000 } },
+        { proxyUrl: "http://127.0.0.1:8317" }
+    );
+    assert.equal("contextWindow" in entry, false);
+    assert.equal(entry.maxInputTokens, 1000000);
+    assert.equal(entry.maxOutputTokens, 128000);
+});
+
+test("missing output metadata never exports zero tokens", () => {
+    const entry = toCopilotModelEntry(
+        { ...model, capabilities: { vision: false }, limits: { contextTokens: 1000000 }, tokenLimitOverrides: { inputTokens: 1000000 } },
+        { proxyUrl: "http://127.0.0.1:8317" }
+    );
+    assert.equal("contextWindow" in entry, false);
+    assert.equal(entry.maxInputTokens, 100000);
+    assert.equal(entry.maxOutputTokens, 8192);
+});
+
+test("both Auto token modes omit input and output fields even with detected limits", () => {
+    const configuration = resolveCapabilityConfiguration(null, { inputTokens: 180000, outputTokens: 16000 });
+    const entry = toCopilotModelEntry(
+        { ...model, capabilities: { vision: false }, limits: configuration.limits.effective, tokenLimitOverrides: configuration.limits.overrides },
+        { proxyUrl: "http://127.0.0.1:8317" }
+    );
     assert.equal("maxInputTokens" in entry, false);
     assert.equal("maxOutputTokens" in entry, false);
+});
+
+test("one manual token mode retains both exported limits and the Auto fallback", () => {
+    const configuration = resolveCapabilityConfiguration(null, { inputTokens: 180000 }, { outputTokens: 32000 });
+    const entry = toCopilotModelEntry(
+        { ...model, capabilities: { vision: false }, limits: configuration.limits.effective, tokenLimitOverrides: configuration.limits.overrides },
+        { proxyUrl: "http://127.0.0.1:8317" }
+    );
+    assert.equal(entry.maxInputTokens, 180000);
+    assert.equal(entry.maxOutputTokens, 32000);
 });
 
 test("probe requires a response identifying the red image", () => {

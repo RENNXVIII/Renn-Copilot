@@ -280,7 +280,6 @@ function CapabilitySummary({ model }: { model: ModelEntry }) {
     source === "manual" ? "Manual" : source === "probe" ? "Verified" : source === "catalog" ? "Catalog" : source === "provider-metadata" ? "Provider" : "Unknown";
   const checkedLabel = checkedAt ? ` · checked ${new Date(checkedAt).toLocaleString()}` : "";
   const title = `${note || sourceLabel}${checkedLabel}`;
-  const limits = model.capabilityConfiguration.limits.effective;
   const manualCount = Object.keys(model.capabilityConfiguration.overrides).length;
 
   return (
@@ -299,7 +298,6 @@ function CapabilitySummary({ model }: { model: ModelEntry }) {
       </span>
       )}
       {model.reasoning.supported && <span className="badge neutral">Reasoning · {model.reasoning.levels.join("/")}</span>}
-      {limits.contextTokens && <span className="badge neutral">{Math.round(limits.contextTokens / 1000)}K context</span>}
       {manualCount > 0 && <span className="badge warning">{manualCount} manual</span>}
     </div>
   );

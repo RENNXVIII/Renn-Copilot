@@ -349,6 +349,13 @@ export function mergeEnabledModels(catalog = [], enabledModelIds = [], providerM
 export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl, forceCompatibilityProxy = false }) {
     const verifiedVision = model.capabilities?.vision;
     const reasoning = model.reasoning;
+    const limits = model.limits || {};
+    const overrides = model.tokenLimitOverrides || {};
+    const exportTokenLimits = overrides.inputTokens !== undefined || overrides.outputTokens !== undefined;
+    // With either manual override, retain positive limits for both fields:
+    // Custom Endpoint's model adapter treats a missing maxOutputTokens as 0.
+    const maxOutputTokens = limits.outputTokens ?? 8192;
+    const maxInputTokens = limits.inputTokens ?? 100000;
     // Claude-family models (any provider -- Antigravity, Claude Code login, or
     // a custom endpoint) get routed through our own sanitizing proxy instead
     // of straight to CLIProxyAPI, since Anthropic rejects non-default
@@ -362,6 +369,7 @@ export function toCopilotModelEntry(model, { proxyUrl, ownBaseUrl, forceCompatib
         id: model.id,
         name: model.label,
         url,
+        ...(exportTokenLimits ? { maxInputTokens, maxOutputTokens } : {}),
         toolCalling: true,
         vision: verifiedVision === true,
         ...(reasoning?.supported ? {

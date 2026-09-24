@@ -2,7 +2,7 @@ import type { ModelCapabilityPatch, ModelEntry } from "../api/client";
 
 export const COMMON_REASONING_LEVELS = ["none", "low", "medium", "high", "xhigh", "max"];
 
-type TokenField = "contextTokens" | "inputTokens" | "outputTokens";
+type TokenField = "inputTokens" | "outputTokens";
 
 export interface CapabilityFormState {
   vision: "auto" | "supported" | "unsupported";
@@ -25,12 +25,10 @@ export function capabilityFormFromModel(model: ModelEntry): CapabilityFormState 
     reasoningLevels: commonLevels,
     customReasoningLevels: customLevels.join(", "),
     tokenModes: {
-      contextTokens: overrides.contextTokens ? "manual" : "auto",
       inputTokens: overrides.inputTokens ? "manual" : "auto",
       outputTokens: overrides.outputTokens ? "manual" : "auto",
     },
     tokenValues: {
-      contextTokens: String(overrides.contextTokens ?? model.capabilityConfiguration.limits.effective.contextTokens ?? ""),
       inputTokens: String(overrides.inputTokens ?? model.capabilityConfiguration.limits.effective.inputTokens ?? ""),
       outputTokens: String(overrides.outputTokens ?? model.capabilityConfiguration.limits.effective.outputTokens ?? ""),
     },
@@ -62,9 +60,9 @@ export function capabilityPatchFromForm(state: CapabilityFormState): ModelCapabi
     vision: state.vision === "auto" ? null : state.vision === "supported",
     reasoningSupported: state.reasoningMode === "auto" ? null : state.reasoningMode === "enabled",
     reasoningLevels: state.reasoningMode === "auto" ? null : state.reasoningMode === "enabled" ? levels : null,
+    contextTokens: null,
   };
   const labels: Record<TokenField, string> = {
-    contextTokens: "Context size",
     inputTokens: "Max input tokens",
     outputTokens: "Max output tokens",
   };
