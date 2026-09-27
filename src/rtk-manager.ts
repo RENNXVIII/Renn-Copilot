@@ -193,6 +193,7 @@ export class RtkManagerCore {
     let version: string | null = null;
     try {
       const v = await this.runRtk(binaryPath, ["--version"]);
+      if (v.exitCode !== 0) return null;
       version = parseRtkVersion(`${v.stdout}\n${v.stderr}`);
     } catch {
       return null;
@@ -200,6 +201,7 @@ export class RtkManagerCore {
     if (!version) return null;
     try {
       const g = await this.runRtk(binaryPath, ["gain", "--format", "json"]);
+      if (g.exitCode !== 0) return null;
       parseRtkGain(JSON.parse(g.stdout));
     } catch {
       return null;
@@ -502,7 +504,11 @@ export class RtkManagerCore {
         throw new Error(`${this.localBinSymlink} already exists and is not managed by Renn.`);
       }
       if (existing !== manifest.binaryPath) {
-        if (existing !== null) await fsp.rm(this.localBinSymlink, { force: true });
+        if (existing !== null) {
+          // Ownership is not provable once the link points elsewhere, even if
+          // our manifest says we originally created one at this path.
+          throw new Error(`${this.localBinSymlink} already exists and is not managed by Renn.`);
+        }
         await fsp.symlink(manifest.binaryPath, this.localBinSymlink);
         await this.writeManifest({ ...manifest, createdSymlink: true });
       }
@@ -634,7 +640,14 @@ export class RtkManagerCore {
       if (manifest.addedToUserPath) {
         await this.a.removeFromUserPath(this.managedBinDir);
       }
-      await fsp.rm(this.managedBinDir, { recursive: true, force: true });
+      // Only the recorded binary belongs to Renn; don't recursively delete
+      // another file a user may have placed in this shared bin directory.
+      if (path.resolve(manifest.binaryPath) === path.resolve(this.managedBinaryPath)) {
+        await fsp.rm(manifest.binaryPath, { force: true });
+      }
+      await fsp.rmdir(this.managedBinDir).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== "ENOTEMPTY" && err.code !== "ENOENT") throw err;
+      });
       await fsp.rm(this.manifestPath, { force: true });
     });
   }

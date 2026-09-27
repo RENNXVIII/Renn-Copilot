@@ -49,6 +49,31 @@ body {
   font-weight: 600;
 }
 
+.tools-nav {
+  display: flex;
+  gap: 6px;
+  padding: 12px 16px 0;
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.tools-nav button {
+  padding: 6px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--vscode-foreground);
+  font: inherit;
+  cursor: pointer;
+}
+
+.tools-nav button.active {
+  border-bottom-color: var(--vscode-focusBorder);
+  font-weight: 600;
+}
+
+.tools-nav button:hover { background: var(--vscode-toolbar-hoverBackground); }
+.tools-nav button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: -1px; }
+
 .page {
   padding: 16px;
   display: flex;
@@ -65,6 +90,30 @@ body {
   color: var(--vscode-descriptionForeground);
   font-size: 0.9em;
   margin: 0;
+}
+
+.ponytail-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-textLink-foreground);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.skills-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.skills-picker select {
+  padding: 5px 8px;
+  color: var(--vscode-input-foreground);
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  border-radius: 3px;
 }
 
 .grid {

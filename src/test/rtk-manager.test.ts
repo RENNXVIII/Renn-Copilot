@@ -367,6 +367,16 @@ test("ensureManagedOnPath refuses to clobber a non-Renn ~/.local/bin/rtk", async
   await assert.rejects(() => core.ensureManagedOnPath(), /not managed by Renn/);
 });
 
+test("ensureManagedOnPath refuses to replace a user symlink", { skip: !canSymlink }, async () => {
+  const { core, homeDir } = await makeManager({ platform: "linux" });
+  await core.ensureBinary();
+  const link = path.join(homeDir, ".local", "bin", "rtk");
+  await fsp.mkdir(path.dirname(link), { recursive: true });
+  await fsp.symlink("/other/rtk", link);
+  await assert.rejects(() => core.ensureManagedOnPath(), /not managed by Renn/);
+  assert.equal(await fsp.readlink(link), "/other/rtk");
+});
+
 test("ensureManagedOnPath adds the managed dir to the user PATH on Windows", async () => {
   const { core, rec, storageDir } = await makeManager({ platform: "win32", arch: "x64" });
   await core.ensureBinary();
@@ -396,6 +406,16 @@ test("removeManaged leaves a user-owned symlink target untouched", { skip: !canS
   // Renn didn't create it, so the manifest's createdSymlink is false: untouched.
   assert.ok(fs.existsSync(path.join(dir, "rtk")));
   assert.equal(await fsp.readlink(path.join(dir, "rtk")), "/some/other/rtk");
+});
+
+test("removeManaged preserves other files in managed bin directory", async () => {
+  const { core, storageDir } = await makeManager({ platform: "win32", arch: "x64" });
+  await core.ensureBinary();
+  const extra = path.join(storageDir, "bin", "user-notes.txt");
+  await fsp.writeFile(extra, "keep me");
+  await core.removeManaged();
+  assert.equal(await fsp.readFile(extra, "utf8"), "keep me");
+  assert.equal(fs.existsSync(path.join(storageDir, "rtk-manifest.json")), false);
 });
 
 test("getStatus reports unsupported platforms clearly", async () => {

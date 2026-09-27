@@ -69,6 +69,7 @@ export interface RtkResponseSink {
  * webview always gets a reply for every requestId it sends.
  */
 export class RtkWebviewDispatcher {
+  private selectedWorkspaceDir: string | undefined;
   constructor(private readonly manager: RtkManagerCore) {}
 
   async handle(raw: unknown, sink: RtkResponseSink): Promise<void> {
@@ -123,7 +124,7 @@ export class RtkWebviewDispatcher {
         await this.manager.ensureManagedOnPath().catch(() => undefined);
         await this.manager.setup(scope, workspaceDir);
 
-        const status = await this.manager.getStatus(this.optionalWorkspaceDir());
+        const status = await this.manager.getStatus(workspaceDir ?? this.optionalWorkspaceDir());
         // The setup step pins the hook to an absolute binary path, so only the
         // final status can determine whether a restart is still necessary.
         if (status.restartRequired) {
@@ -150,7 +151,7 @@ export class RtkWebviewDispatcher {
         if (!confirmed) return reply({ cancelled: true });
 
         await this.manager.uninstall(scope, workspaceDir);
-        const status = await this.manager.getStatus(this.optionalWorkspaceDir());
+        const status = await this.manager.getStatus(workspaceDir ?? this.optionalWorkspaceDir());
         return reply({ status });
       }
 
@@ -186,11 +187,17 @@ export class RtkWebviewDispatcher {
     return choice === confirmLabel;
   }
 
-  /** The first workspace folder path, or undefined when none is open. */
+  /** Use the most recently selected workspace while it remains open. */
   private optionalWorkspaceDir(): string | undefined {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || folders.length === 0) return undefined;
-    return folders[0].uri.fsPath;
+    if (folders.length > 1 && !this.selectedWorkspaceDir) return undefined;
+    if (this.selectedWorkspaceDir) {
+      const selected = folders.find((folder) => folder.uri.fsPath === this.selectedWorkspaceDir);
+      if (selected) return selected.uri.fsPath;
+      this.selectedWorkspaceDir = undefined;
+    }
+    return folders.length === 1 ? folders[0].uri.fsPath : undefined;
   }
 
   /**
@@ -206,12 +213,16 @@ export class RtkWebviewDispatcher {
     if (!vscode.workspace.isTrusted) {
       throw new Error("This workspace is not trusted. Trust it before configuring RTK for the workspace.");
     }
-    if (folders.length === 1) return folders[0].uri.fsPath;
+    if (folders.length === 1) {
+      this.selectedWorkspaceDir = folders[0].uri.fsPath;
+      return this.selectedWorkspaceDir;
+    }
 
     const picked = await vscode.window.showWorkspaceFolderPick({
       placeHolder: "Select the workspace folder to configure RTK for",
     });
     if (!picked) throw new Error("No workspace folder selected.");
-    return picked.uri.fsPath;
+    this.selectedWorkspaceDir = picked.uri.fsPath;
+    return this.selectedWorkspaceDir;
   }
 }

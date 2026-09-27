@@ -43,7 +43,7 @@ app.use("/api", router);
 
 app.get("/", (req, res) => res.json({ name: "renn-copilot-backend", status: "ok" }));
 
-app.listen(settings.port, () => {
+app.listen(settings.port, "127.0.0.1", () => {
   console.log(`renn-copilot backend listening on http://127.0.0.1:${settings.port}`);
   console.log(`CLIProxyAPI home: ${settings.cliproxyHome}`);
 });

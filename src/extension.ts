@@ -5,6 +5,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as backendManager from "./backend-manager";
+import { readModelProviders } from "./model-file";
 import { openDashboardPanel } from "./webview-panel";
 import { RennSidebarViewProvider, SIDEBAR_VIEW_ID } from "./webview-view";
 import { createRtkManager, RtkManagerCore } from "./rtk-manager";
@@ -544,11 +545,9 @@ async function performSyncModels(showNotifications: boolean) {
     // prompting for one at all -- see the doc comment above), tell the
     // backend to stop requiring its proxy API key too, so it doesn't matter
     // that no Authorization header is ever attached to chat requests.
-    await putJson(`${backendUrl}/api/server/proxy-auth`, { enabled: requireApiKey }).catch(() => {
-      // Non-fatal -- the backend might not be reachable for this call even
-      // though /api/models/export just succeeded (rare race); the model
-      // sync below still proceeds either way.
-    });
+    // Do not register a provider when authentication cannot be configured as
+    // requested: a failed toggle would leave every chat request unauthorized.
+    await putJson(`${backendUrl}/api/server/proxy-auth`, { enabled: requireApiKey });
 
     const { created, changed } = writeProviderEntry(remote.models, requireApiKey ? remote.apiKey ?? "" : "");
 
@@ -695,15 +694,7 @@ function profileDirFromContext(): string | undefined {
  */
 function writeProviderEntry(models: RemoteModelEntry[], apiKey: string): { created: boolean; changed: boolean } {
   const filePath = chatLanguageModelsPath();
-  let providers: ChatLanguageModelProvider[] = [];
-  try {
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) providers = parsed;
-  } catch {
-    // File doesn't exist yet, or isn't valid JSON -- start fresh.
-    providers = [];
-  }
+  const providers = readModelProviders(filePath);
 
   const { providers: next, created, changed } = upsertProviderEntry(providers, models, apiKey);
   if (!changed) return { created: false, changed: false };

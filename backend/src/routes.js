@@ -50,6 +50,15 @@ function normalizeList(raw) {
     return [];
 }
 
+export function providerItemsFromBody(body) {
+    if (!Array.isArray(body?.items)) {
+        const err = new Error("items must be an array (use [] to clear the list)");
+        err.status = 400;
+        throw err;
+    }
+    return body.items;
+}
+
 function asyncHandler(fn) {
     return (req, res) => fn(req, res).catch((err) => {
         console.error(err);
@@ -914,7 +923,7 @@ router.put(
     "/api-providers/openai-compat",
     express.json(),
     asyncHandler(async (req, res) => {
-        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        const items = providerItemsFromBody(req.body);
         res.json({ items: normalizeList(await management.putOpenAiCompatibility(items)) });
     })
 );
@@ -993,7 +1002,7 @@ router.put(
     "/api-providers/gemini-key",
     express.json(),
     asyncHandler(async (req, res) => {
-        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        const items = providerItemsFromBody(req.body);
         res.json({ items: normalizeList(await management.putGeminiApiKeys(items)) });
     })
 );
@@ -1006,7 +1015,7 @@ router.put(
     "/api-providers/claude-key",
     express.json(),
     asyncHandler(async (req, res) => {
-        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        const items = providerItemsFromBody(req.body);
         res.json({ items: normalizeList(await management.putClaudeApiKeys(items)) });
     })
 );
@@ -1019,7 +1028,7 @@ router.put(
     "/api-providers/codex-key",
     express.json(),
     asyncHandler(async (req, res) => {
-        const items = Array.isArray(req.body?.items) ? req.body.items : [];
+        const items = providerItemsFromBody(req.body);
         res.json({ items: normalizeList(await management.putCodexApiKeys(items)) });
     })
 );

@@ -1,6 +1,8 @@
 import * as vscode from "vscode";
 import { getWebviewHtml } from "./webview-html";
 import { getRtkDispatcher } from "./extension";
+import { handlePonytailMessage } from "./ponytail-webview";
+import { handleSkillsMessage } from "./skills-webview";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
@@ -33,6 +35,14 @@ export function openDashboardPanel(context: vscode.ExtensionContext, initialPage
   currentPanel.webview.onDidReceiveMessage((message: any) => {
     if (message?.command === "rtk") {
       void getRtkDispatcher()?.handle(message, panel.webview);
+      return;
+    }
+    if (message?.command === "ponytail") {
+      void handlePonytailMessage(message, panel.webview);
+      return;
+    }
+    if (message?.command === "skills") {
+      void handleSkillsMessage(message, panel.webview);
       return;
     }
     // A plain window.open() inside a webview doesn't reliably reach the

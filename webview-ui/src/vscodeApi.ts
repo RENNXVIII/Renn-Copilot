@@ -134,3 +134,86 @@ export function requestRtk(action: RtkAction, scope?: RtkScope, timeoutMs = 120_
     getVsCodeApi().postMessage({ command: "rtk", requestId, action, scope });
   });
 }
+
+export type PonytailStatus = "enabled" | "disabled" | "conflict";
+export type PonytailMode = "lite" | "full" | "ultra";
+export interface PonytailResponse {
+  command: "ponytailResponse";
+  requestId: string;
+  status?: PonytailStatus;
+  mode?: PonytailMode;
+  error?: string;
+  cancelled?: boolean;
+}
+
+let ponytailSeq = 0;
+const pendingPonytail = new Map<string, (response: PonytailResponse) => void>();
+let ponytailListenerAttached = false;
+
+export function requestPonytail(action: "status" | "enable" | "disable", mode?: PonytailMode): Promise<PonytailResponse> {
+  if (!ponytailListenerAttached) {
+    ponytailListenerAttached = true;
+    window.addEventListener("message", (event: MessageEvent) => {
+      const data = event.data as PonytailResponse | undefined;
+      if (data?.command !== "ponytailResponse") return;
+      const resolve = pendingPonytail.get(data.requestId);
+      if (resolve) {
+        pendingPonytail.delete(data.requestId);
+        resolve(data);
+      }
+    });
+  }
+  const requestId = `ponytail-${++ponytailSeq}-${Date.now()}`;
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      pendingPonytail.delete(requestId);
+      resolve({ command: "ponytailResponse", requestId, error: "Request timed out." });
+    }, 120_000);
+    pendingPonytail.set(requestId, (response) => {
+      window.clearTimeout(timer);
+      resolve(response);
+    });
+    getVsCodeApi().postMessage({ command: "ponytail", requestId, action, mode });
+  });
+}
+
+export type SkillState = "installed" | "not-installed" | "conflict";
+export interface SkillsResponse {
+  command: "skillsResponse";
+  requestId: string;
+  names?: string[];
+  status?: SkillState;
+  error?: string;
+  cancelled?: boolean;
+}
+
+let skillsSeq = 0;
+const pendingSkills = new Map<string, (response: SkillsResponse) => void>();
+let skillsListenerAttached = false;
+
+export function requestSkills(action: "list" | "status" | "install" | "remove", id?: string): Promise<SkillsResponse> {
+  if (!skillsListenerAttached) {
+    skillsListenerAttached = true;
+    window.addEventListener("message", (event: MessageEvent) => {
+      const data = event.data as SkillsResponse | undefined;
+      if (data?.command !== "skillsResponse") return;
+      const resolve = pendingSkills.get(data.requestId);
+      if (resolve) {
+        pendingSkills.delete(data.requestId);
+        resolve(data);
+      }
+    });
+  }
+  const requestId = `skills-${++skillsSeq}-${Date.now()}`;
+  return new Promise((resolve) => {
+    const timer = window.setTimeout(() => {
+      pendingSkills.delete(requestId);
+      resolve({ command: "skillsResponse", requestId, error: "Request timed out. Check workspace files before retrying." });
+    }, 120_000);
+    pendingSkills.set(requestId, (response) => {
+      window.clearTimeout(timer);
+      resolve(response);
+    });
+    getVsCodeApi().postMessage({ command: "skills", requestId, action, id });
+  });
+}

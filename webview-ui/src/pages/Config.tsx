@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { usePolling } from "../hooks/usePolling";
+import { mergeConfigDraft } from "../lib/config-draft";
 
 const STRATEGY_OPTIONS = [
   { id: "round-robin" as const, label: "Round-robin", description: "Cycle through every matching credential evenly." },
@@ -8,8 +9,10 @@ const STRATEGY_OPTIONS = [
 ];
 
 export function Config() {
-  const { data, isLoading } = usePolling(api.getConfigYaml, 60000);
+  const { data, isLoading, mutate: mutateConfig } = usePolling(api.getConfigYaml, 60000);
   const [draft, setDraft] = useState("");
+  const baseline = useRef<string | null>(null);
+  const draftRef = useRef("");
   const [saving, setSaving] = useState(false);
   const [revealed, setRevealed] = useState(false);
 
@@ -17,13 +20,25 @@ export function Config() {
   const [routingSaving, setRoutingSaving] = useState(false);
 
   useEffect(() => {
-    if (data) setDraft(data);
+    if (data === undefined) return;
+    const next = mergeConfigDraft(draftRef.current, baseline.current, data);
+    baseline.current = next.baseline;
+    draftRef.current = next.draft;
+    setDraft(next.draft);
   }, [data]);
 
+  function editDraft(value: string) {
+    draftRef.current = value;
+    setDraft(value);
+  }
+
   async function save() {
+    const submitted = draftRef.current;
     setSaving(true);
     try {
-      await api.putConfigYaml(draft);
+      await api.putConfigYaml(submitted);
+      baseline.current = submitted;
+      mutateConfig(submitted, false);
       mutateRouting(undefined, true);
     } finally {
       setSaving(false);
@@ -32,12 +47,16 @@ export function Config() {
 
   async function setStrategy(strategy: "round-robin" | "fill-first") {
     if (routing?.strategy === strategy) return;
+    if (draftRef.current !== baseline.current) return;
     setRoutingSaving(true);
     try {
       await api.setRoutingStrategy(strategy);
       mutateRouting(undefined, true);
       const fresh = await api.getConfigYaml();
-      setDraft(fresh);
+      const next = mergeConfigDraft(draftRef.current, baseline.current, fresh);
+      baseline.current = next.baseline;
+      editDraft(next.draft);
+      mutateConfig(fresh, false);
     } finally {
       setRoutingSaving(false);
     }
@@ -57,7 +76,7 @@ export function Config() {
           {STRATEGY_OPTIONS.map((opt) => (
             <button
               key={opt.id}
-              disabled={routingSaving}
+              disabled={routingSaving || draft !== baseline.current}
               onClick={() => setStrategy(opt.id)}
               className={`strategy-option ${routing?.strategy === opt.id ? "selected" : ""}`}
             >
@@ -75,7 +94,7 @@ export function Config() {
           <p className="card-desc">Loading...</p>
         ) : (
           <div className="config-editor-wrap">
-            <textarea className={`config-editor ${revealed ? "" : "blurred"}`} value={draft} onChange={(e) => setDraft(e.target.value)} spellCheck={false} readOnly={!revealed} tabIndex={revealed ? undefined : -1} />
+            <textarea className={`config-editor ${revealed ? "" : "blurred"}`} value={draft} onChange={(e) => editDraft(e.target.value)} spellCheck={false} readOnly={!revealed} tabIndex={revealed ? undefined : -1} />
             {!revealed && (
               <div className="reveal-overlay">
                 <button className="btn secondary" onClick={() => setRevealed(true)}>
@@ -86,11 +105,11 @@ export function Config() {
           </div>
         )}
         <div className="btn-row">
-          <button className="btn" disabled={saving || !revealed || draft === data} onClick={save}>
+          <button className="btn" disabled={saving || !revealed || draft === baseline.current} onClick={save}>
             {saving ? "Saving..." : "Save"}
           </button>
           {revealed && (
-            <button className="btn secondary" disabled={saving || draft === data} onClick={() => data && setDraft(data)}>
+            <button className="btn secondary" disabled={saving || draft === baseline.current} onClick={() => baseline.current !== null && editDraft(baseline.current)}>
               Discard changes
             </button>
           )}

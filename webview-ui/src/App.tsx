@@ -7,13 +7,17 @@ import { Neuron } from "./pages/Neuron";
 import { Logs } from "./pages/Logs";
 import { Config } from "./pages/Config";
 import { Rtk } from "./pages/Rtk";
+import { Ponytail } from "./pages/Ponytail";
+import { Skills } from "./pages/Skills";
+import { toolTabForPage, type ToolTab } from "./lib/tools-navigation";
 
 const PAGES = [
   { id: "overview", label: "Overview" },
   { id: "providers", label: "Providers" },
   { id: "models", label: "Models" },
   { id: "usage", label: "Usage" },
-  { id: "rtk", label: "RTK" },
+  { id: "tools", label: "Tools" },
+  { id: "skills", label: "Skills" },
   { id: "neuron", label: "Activity" },
   { id: "logs", label: "Logs" },
   { id: "config", label: "Config" },
@@ -32,15 +36,25 @@ declare global {
 }
 
 export function App() {
-  const [page, setPage] = useState<PageId>(() => (isPageId(window.__RENN_INITIAL_PAGE__) ? window.__RENN_INITIAL_PAGE__ : "overview"));
+  const [page, setPage] = useState<PageId>(() => {
+    const initial = window.__RENN_INITIAL_PAGE__;
+    return toolTabForPage(initial) ? "tools" : isPageId(initial) ? initial : "overview";
+  });
+  const [toolTab, setToolTab] = useState<ToolTab>(() => toolTabForPage(window.__RENN_INITIAL_PAGE__) ?? "rtk");
 
   // The sidebar's quick links (e.g. "6/11 enabled" -> Models) postMessage a
   // "navigate" command when this panel is already open, since there's no
   // page reload to re-read window.__RENN_INITIAL_PAGE__ in that case.
   useEffect(() => {
     function onMessage(event: MessageEvent) {
-      if (event.data?.command === "navigate" && isPageId(event.data.page)) {
-        setPage(event.data.page);
+      if (event.data?.command === "navigate") {
+        const tab = toolTabForPage(event.data.page);
+        if (tab) {
+          setToolTab(tab);
+          setPage("tools");
+        } else if (isPageId(event.data.page)) {
+          setPage(event.data.page);
+        }
       }
     }
     window.addEventListener("message", onMessage);
@@ -60,7 +74,19 @@ export function App() {
       {page === "providers" && <Providers />}
       {page === "models" && <Models />}
       {page === "usage" && <Usage />}
-      {page === "rtk" && <Rtk />}
+      {page === "tools" && (
+        <>
+          <nav className="tools-nav" aria-label="Tools tabs">
+            {(["rtk", "ponytail"] as const).map((tab) => (
+              <button key={tab} type="button" className={toolTab === tab ? "active" : ""} aria-current={toolTab === tab ? "page" : undefined} onClick={() => setToolTab(tab)}>
+                {tab === "rtk" ? "RTK" : "Ponytail"}
+              </button>
+            ))}
+          </nav>
+          {toolTab === "rtk" ? <Rtk /> : <Ponytail />}
+        </>
+      )}
+      {page === "skills" && <Skills />}
       {page === "neuron" && <Neuron />}
       {page === "logs" && <Logs />}
       {page === "config" && <Config />}

@@ -2,6 +2,8 @@ import * as vscode from "vscode";
 import { getWebviewHtml } from "./webview-html";
 import { openDashboardPanel } from "./webview-panel";
 import { getRtkDispatcher } from "./extension";
+import { handlePonytailMessage } from "./ponytail-webview";
+import { handleSkillsMessage } from "./skills-webview";
 
 export const SIDEBAR_VIEW_ID = "rennCopilot.sidebarView";
 
@@ -26,6 +28,14 @@ export class RennSidebarViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.onDidReceiveMessage((message: any) => {
       if (message?.command === "rtk") {
         void getRtkDispatcher()?.handle(message, webviewView.webview);
+        return;
+      }
+      if (message?.command === "ponytail") {
+        void handlePonytailMessage(message, webviewView.webview);
+        return;
+      }
+      if (message?.command === "skills") {
+        void handleSkillsMessage(message, webviewView.webview);
         return;
       }
       switch (message?.command) {

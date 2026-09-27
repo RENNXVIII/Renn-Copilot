@@ -3,6 +3,7 @@ import { api, type ApiKeyEntry, type AuthFileEntry, type OpenAiCompatEntry, type
 import { usePolling } from "../hooks/usePolling";
 import { useEmailReveal } from "../hooks/useEmailReveal";
 import { loadCustomGroups, saveCustomGroups } from "../lib/custom-groups";
+import { updateCustomProvider, updateXaiProvider } from "../lib/provider-form";
 import { maskKey } from "../lib/utils";
 import { Modal, ModalHeader, MaskedEmail } from "../components/Modal";
 import { postOpenExternal } from "../vscodeApi";
@@ -995,12 +996,7 @@ function XaiApiKeyModalContent({ editIndex, onSaved, onClose }: { editIndex?: nu
         setSaving(true);
         try {
             const models = parsedModels();
-            await api.setXaiKey({
-                name: "xai",
-                "base-url": "https://api.x.ai/v1",
-                "api-key-entries": editIndex === undefined ? [...keyEntries, { "api-key": apiKey.trim() }] : keyEntries.map((key, i) => i === editIndex ? { ...key, "api-key": apiKey.trim() } : key),
-                ...(models.length ? { models } : {}),
-            });
+            await api.setXaiKey(updateXaiProvider(entry, editIndex, apiKey.trim(), models));
             setApiKey("");
         } finally {
             setSaving(false);
@@ -1124,12 +1120,7 @@ function CustomProviderModalContent({
             .map((m) => m.trim())
             .filter(Boolean)
             .map((m) => ({ name: m }));
-        const entry: OpenAiCompatEntry = {
-            name: name.trim(),
-            "base-url": baseUrl.trim(),
-            "api-key-entries": [{ "api-key": apiKey.trim() }],
-            ...(models.length ? { models } : {}),
-        };
+        const entry = updateCustomProvider(editIndex === undefined ? undefined : items[editIndex], name.trim(), baseUrl.trim(), apiKey.trim(), models);
         setSaving(true);
         setSaveError(null);
         try {

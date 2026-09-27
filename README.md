@@ -10,7 +10,7 @@ No separate terminal. No browser tab. No extra process to babysit.
 
 <br/>
 
-[![Version](https://img.shields.io/badge/version-0.8.13-blue)](https://github.com/RENNXVIII/Renn-Copilot)
+[![Version](https://img.shields.io/badge/version-0.9.2-blue)](https://github.com/RENNXVIII/Renn-Copilot)
 [![VS Code](https://img.shields.io/badge/VS%20Code-%5E1.95-007ACC?logo=visualstudiocode&logoColor=white)](https://code.visualstudio.com/)
 [![Local-first](https://img.shields.io/badge/local--first-100%25-brightgreen)](#why-renn-copilot)
 [![License](https://img.shields.io/badge/license-see%20LICENSE-lightgrey)](LICENSE)
@@ -81,6 +81,8 @@ compact **Activity Bar sidebar**.
 | **Activity** | A live-ish "neuron" view of your models — each one lights up as it's hit, sourced from usage (near-live, typically within ~15s). |
 | **Logs** | Live tail of CLIProxyAPI's request log and the backend's process log, with search, copy, and download. |
 | **Config** | Raw `config.yaml` editor (hidden by default) and routing strategy (round-robin / fill-first). |
+| **Tools → RTK / Ponytail** | RTK manages its Copilot hook and token savings. Ponytail enables or disables workspace-scoped Copilot Chat guidance in `.github/instructions/renn-ponytail.instructions.md`, in **lite**, **full** (default), or **ultra** mode; it does not install the Copilot CLI plugin or switch CLI session modes. |
+| **Skills** | Install/remove workspace-scoped skills from UI UX Pro Max, Wondel.ai (choose individual skills), and Humanizer. Downloads files into `.github/skills/` after confirmation, without executing scripts or overwriting user files. |
 
 The **sidebar** is a deliberate, focused summary — server status with
 Start/Stop/Restart, a one-line health line, the enabled-model count, and quick

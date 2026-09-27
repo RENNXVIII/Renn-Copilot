@@ -42,7 +42,7 @@ function patchTopLevelScalar(yamlText, key, valueLiteral) {
 // flow list (`key: ["x"]` / `key: []`) or a block list (`key:` followed by
 // indented `- item` lines) -- replaces whichever form is present with a
 // fresh flow-style list, without touching anything else in the file.
-function patchTopLevelList(yamlText, key, items) {
+export function patchTopLevelList(yamlText, key, items) {
     const lines = yamlText.split("\n");
     const startRe = new RegExp(`^${key}:\\s*(.*)$`);
     const idx = lines.findIndex((l) => startRe.test(l));
@@ -54,7 +54,9 @@ function patchTopLevelList(yamlText, key, items) {
     const inlineRemainder = lines[idx].match(startRe)[1].trim();
     let end = idx + 1;
     if (!inlineRemainder) {
-        while (end < lines.length && /^\s*-\s/.test(lines[end])) end++;
+        // Comments and blank lines can appear between YAML block-list items.
+        // Stop only at the next top-level key, not at the first non-item line.
+        while (end < lines.length && (lines[end].trim() === "" || /^\s/.test(lines[end]) || /^#/.test(lines[end]))) end++;
     }
     lines.splice(idx, end - idx, newLine);
     return lines.join("\n");
@@ -486,6 +488,13 @@ export function ensureProxyApiKey() {
     }
 
     if (Array.isArray(doc["api-keys"]) && doc["api-keys"].length > 0) {
+        const ownKeys = loadOwnKeys();
+        // If we already issued a key, don't silently claim the user's first
+        // key as our own when they reorder or add keys to config.yaml.
+        if (ownKeys.proxyApiKey) {
+            settings.proxyApiKey = ownKeys.proxyApiKey;
+            return settings.proxyApiKey;
+        }
         const fileKey = doc["api-keys"][0];
         settings.proxyApiKey = fileKey;
         saveOwnKeys({ proxyApiKey: fileKey });
@@ -554,6 +563,15 @@ export function ensureLoggingToFile() {
  * api-keys array makes CLIProxyAPI accept every request unauthenticated).
  * CLIProxyAPI watches config.yaml and hot-reloads it, so no restart needed.
  */
+export function selectProxyAuthKeys(currentKeys, proxyApiKey, enabled) {
+    const others = currentKeys.filter((key) => key !== proxyApiKey);
+    if (!enabled) {
+        if (others.length) throw new Error("Cannot disable proxy authentication while other API keys are configured. Remove them explicitly first.");
+        return [];
+    }
+    return proxyApiKey && !currentKeys.includes(proxyApiKey) ? [...currentKeys, proxyApiKey] : currentKeys;
+}
+
 export function setProxyAuthEnabled(enabled) {
     if (!fs.existsSync(configPath())) return { changed: false };
     let doc;
@@ -566,8 +584,8 @@ export function setProxyAuthEnabled(enabled) {
 
     const ownKeys = loadOwnKeys();
     const proxyApiKey = ownKeys.proxyApiKey || settings.proxyApiKey;
-    const nextKeys = enabled && proxyApiKey ? [proxyApiKey] : [];
     const currentKeys = Array.isArray(doc["api-keys"]) ? doc["api-keys"] : [];
+    const nextKeys = selectProxyAuthKeys(currentKeys, proxyApiKey, enabled);
     if (JSON.stringify(currentKeys) === JSON.stringify(nextKeys)) return { changed: false };
 
     const patchedText = patchTopLevelList(fs.readFileSync(configPath(), "utf8"), "api-keys", nextKeys);
